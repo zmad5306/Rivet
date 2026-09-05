@@ -7,7 +7,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn smoke() {
+    fn main_completes_without_panicking() {
         main();
     }
 }

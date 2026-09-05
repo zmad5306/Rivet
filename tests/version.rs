@@ -1,6 +1,6 @@
 use rivet::version;
 
 #[test]
-fn version_is_exposed() {
+fn version_returns_non_empty_string() {
     assert!(!version().is_empty());
 }
