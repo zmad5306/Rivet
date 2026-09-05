@@ -35,23 +35,6 @@ impl Record {
 
 }
 
-#[test]
-fn record_constructor_preserves_all_fields() {
-    let offset: u64 = 0;
-    let timestamp: u64 = 1_700_000_000;
-    let key: Option<Vec<u8>> = Some(vec!(10, 20, 30));
-    let expected_key: Option<&[u8]> = Some(&[10, 20, 30]);
-    let payload: Vec<u8> = vec![1, 2, 3];
-    let expected_payload: &[u8] = &[1, 2, 3];
-
-    let record = Record::new(offset, timestamp, key, payload);
-
-    assert_eq!(record.offset(), offset);
-    assert_eq!(record.timestamp(), timestamp);
-    assert_eq!(record.key(), expected_key);
-    assert_eq!(record.payload(), expected_payload);
-}
-
 #[derive(Debug, PartialEq, Eq)]
 pub struct PublishInput {
     key: Option<Vec<u8>>,
@@ -78,16 +61,20 @@ impl PublishInput {
 }
 
 #[test]
-fn publish_input_constructor_preserves_all_fields() {
+fn record_constructor_preserves_all_fields() {
+    let offset: u64 = 0;
+    let timestamp: u64 = 1_700_000_000;
     let key: Option<Vec<u8>> = Some(vec!(10, 20, 30));
     let expected_key: Option<&[u8]> = Some(&[10, 20, 30]);
     let payload: Vec<u8> = vec![1, 2, 3];
     let expected_payload: &[u8] = &[1, 2, 3];
 
-    let input = PublishInput::new(key, payload);
+    let record = Record::new(offset, timestamp, key, payload);
 
-    assert_eq!(input.key(), expected_key);
-    assert_eq!(input.payload(), expected_payload);
+    assert_eq!(record.offset(), offset);
+    assert_eq!(record.timestamp(), timestamp);
+    assert_eq!(record.key(), expected_key);
+    assert_eq!(record.payload(), expected_payload);
 }
 
 #[test]
@@ -143,6 +130,19 @@ fn records_with_different_payloads_are_unequal() {
 #[test]
 fn records_with_absent_and_empty_keys_are_unequal() {
     todo!("Compare otherwise identical records with None and Some(empty bytes).");
+}
+
+#[test]
+fn publish_input_constructor_preserves_all_fields() {
+    let key: Option<Vec<u8>> = Some(vec!(10, 20, 30));
+    let expected_key: Option<&[u8]> = Some(&[10, 20, 30]);
+    let payload: Vec<u8> = vec![1, 2, 3];
+    let expected_payload: &[u8] = &[1, 2, 3];
+
+    let input = PublishInput::new(key, payload);
+
+    assert_eq!(input.key(), expected_key);
+    assert_eq!(input.payload(), expected_payload);
 }
 
 #[test]
