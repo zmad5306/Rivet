@@ -1,11 +1,6 @@
-use rivet::is_valid_topic_name;
+use rivet::version;
 
 #[test]
-fn empty_not_allowd() {
-    assert!(!is_valid_topic_name(""));
-}
-
-#[test]
-fn any_string_allowed() {
-    assert!(is_valid_topic_name("some string"));
+fn version_is_exposed() {
+    assert!(!version().is_empty());
 }

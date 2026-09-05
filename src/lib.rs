@@ -1,13 +1,8 @@
-pub fn is_valid_topic_name(name: &str) -> bool {
-    !name.is_empty()
+pub fn version() -> &'static str {
+    env!("CARGO_PKG_VERSION")
 }
 
 #[test]
-fn empty_not_allowd() {
-    assert!(!is_valid_topic_name(""));
-}
-
-#[test]
-fn any_string_allowed() {
-    assert!(is_valid_topic_name("some string"));
+fn version_is_exposed() {
+    assert!(!version().is_empty());
 }
