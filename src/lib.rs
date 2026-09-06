@@ -1,6 +1,6 @@
-pub mod storage;
 pub mod broker;
 pub mod error;
+pub mod storage;
 
 pub fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")
@@ -8,7 +8,7 @@ pub fn version() -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{version};
+    use super::version;
 
     #[test]
     fn version_returns_non_empty_string() {
