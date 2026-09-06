@@ -34,12 +34,12 @@ impl Record {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub struct Event {
+pub struct PublishInput {
     key: Option<Vec<u8>>,
     payload: Vec<u8>,
 }
 
-impl Event {
+impl PublishInput {
     pub fn new(key: Option<Vec<u8>>, payload: Vec<u8>) -> Self {
         Self { key, payload }
     }
@@ -59,7 +59,7 @@ impl Event {
 
 #[cfg(test)]
 mod tests {
-    use super::{Event, Record};
+    use super::{PublishInput, Record};
 
     #[test]
     fn record_constructor_preserves_all_fields() {
@@ -273,119 +273,119 @@ mod tests {
     }
 
     #[test]
-    fn event_constructor_preserves_all_fields() {
+    fn publish_input_constructor_preserves_all_fields() {
         let key: Option<Vec<u8>> = Some(vec![10, 20, 30]);
         let expected_key: Option<&[u8]> = Some(&[10, 20, 30]);
         let payload: Vec<u8> = vec![1, 2, 3];
         let expected_payload: &[u8] = &[1, 2, 3];
 
-        let event = Event::new(key, payload);
+        let input = PublishInput::new(key, payload);
 
-        assert_eq!(event.key(), expected_key);
-        assert_eq!(event.payload(), expected_payload);
+        assert_eq!(input.key(), expected_key);
+        assert_eq!(input.payload(), expected_payload);
     }
 
     #[test]
-    fn event_absent_key_is_preserved() {
+    fn publish_input_absent_key_is_preserved() {
         let key: Option<Vec<u8>> = None;
         let expected_key: Option<&[u8]> = None;
         let payload: Vec<u8> = vec![1, 2, 3];
         let expected_payload: &[u8] = &[1, 2, 3];
 
-        let event = Event::new(key, payload);
+        let input = PublishInput::new(key, payload);
 
-        assert_eq!(event.key(), expected_key);
-        assert_eq!(event.payload(), expected_payload);
+        assert_eq!(input.key(), expected_key);
+        assert_eq!(input.payload(), expected_payload);
     }
 
     #[test]
-    fn event_empty_key_is_preserved() {
+    fn publish_input_empty_key_is_preserved() {
         let key: Option<Vec<u8>> = Some(vec![]);
         let expected_key: Option<&[u8]> = Some(&[]);
         let payload: Vec<u8> = vec![1, 2, 3];
         let expected_payload: &[u8] = &[1, 2, 3];
 
-        let event = Event::new(key, payload);
+        let input = PublishInput::new(key, payload);
 
-        assert_eq!(event.key(), expected_key);
-        assert_eq!(event.payload(), expected_payload);
+        assert_eq!(input.key(), expected_key);
+        assert_eq!(input.payload(), expected_payload);
     }
 
     #[test]
-    fn event_empty_payload_is_preserved() {
+    fn publish_input_empty_payload_is_preserved() {
         let key: Option<Vec<u8>> = Some(vec![10, 20, 30]);
         let expected_key: Option<&[u8]> = Some(&[10, 20, 30]);
         let payload: Vec<u8> = vec![];
         let expected_payload: &[u8] = &[];
 
-        let event = Event::new(key, payload);
+        let input = PublishInput::new(key, payload);
 
-        assert_eq!(event.key(), expected_key);
-        assert_eq!(event.payload(), expected_payload);
+        assert_eq!(input.key(), expected_key);
+        assert_eq!(input.payload(), expected_payload);
     }
 
     #[test]
-    fn event_non_utf8_bytes_are_preserved() {
+    fn publish_input_non_utf8_bytes_are_preserved() {
         let key: Option<Vec<u8>> = Some(vec![0xFF, 0xFE, 0x00]);
         let expected_key: Option<&[u8]> = Some(&[0xFF, 0xFE, 0x00]);
         let payload: Vec<u8> = vec![0xFF, 0xFE, 0x00];
         let expected_payload: &[u8] = &[0xFF, 0xFE, 0x00];
 
-        let event = Event::new(key, payload);
+        let input = PublishInput::new(key, payload);
 
-        assert_eq!(event.key(), expected_key);
-        assert_eq!(event.payload(), expected_payload);
+        assert_eq!(input.key(), expected_key);
+        assert_eq!(input.payload(), expected_payload);
     }
 
     #[test]
-    fn events_with_identical_fields_are_equal() {
+    fn publish_inputs_with_identical_fields_are_equal() {
         let key1: Option<Vec<u8>> = Some(vec![10, 20, 30]);
         let key2: Option<Vec<u8>> = Some(vec![10, 20, 30]);
         let payload1: Vec<u8> = vec![1, 2, 3];
         let payload2: Vec<u8> = vec![1, 2, 3];
 
-        let event1 = Event::new(key1, payload1);
-        let event2 = Event::new(key2, payload2);
+        let input1 = PublishInput::new(key1, payload1);
+        let input2 = PublishInput::new(key2, payload2);
 
-        assert_eq!(event1, event2);
+        assert_eq!(input1, input2);
     }
 
     #[test]
-    fn events_with_different_keys_are_unequal() {
+    fn publish_inputs_with_different_keys_are_unequal() {
         let key1: Option<Vec<u8>> = Some(vec![10, 20, 30]);
         let key2: Option<Vec<u8>> = Some(vec![20, 30, 40]);
         let payload1: Vec<u8> = vec![1, 2, 3];
         let payload2: Vec<u8> = vec![1, 2, 3];
 
-        let event1 = Event::new(key1, payload1);
-        let event2 = Event::new(key2, payload2);
+        let input1 = PublishInput::new(key1, payload1);
+        let input2 = PublishInput::new(key2, payload2);
 
-        assert_ne!(event1, event2);
+        assert_ne!(input1, input2);
     }
 
     #[test]
-    fn events_with_different_payloads_are_unequal() {
+    fn publish_inputs_with_different_payloads_are_unequal() {
         let key1: Option<Vec<u8>> = Some(vec![10, 20, 30]);
         let key2: Option<Vec<u8>> = Some(vec![10, 20, 30]);
         let payload1: Vec<u8> = vec![1, 2, 3];
         let payload2: Vec<u8> = vec![2, 3, 4];
 
-        let event1 = Event::new(key1, payload1);
-        let event2 = Event::new(key2, payload2);
+        let input1 = PublishInput::new(key1, payload1);
+        let input2 = PublishInput::new(key2, payload2);
 
-        assert_ne!(event1, event2);
+        assert_ne!(input1, input2);
     }
 
     #[test]
-    fn events_with_absent_and_empty_keys_are_unequal() {
+    fn publish_inputs_with_absent_and_empty_keys_are_unequal() {
         let key1: Option<Vec<u8>> = None;
         let key2: Option<Vec<u8>> = Some(vec![]);
         let payload1: Vec<u8> = vec![1, 2, 3];
         let payload2: Vec<u8> = vec![1, 2, 3];
 
-        let event1 = Event::new(key1, payload1);
-        let event2 = Event::new(key2, payload2);
+        let input1 = PublishInput::new(key1, payload1);
+        let input2 = PublishInput::new(key2, payload2);
 
-        assert_ne!(event1, event2);
+        assert_ne!(input1, input2);
     }
 }
