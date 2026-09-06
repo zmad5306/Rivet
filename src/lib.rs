@@ -1,10 +1,17 @@
 pub mod storage;
+pub mod broker;
+pub mod error;
 
 pub fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
 
-#[test]
-fn version_returns_non_empty_string() {
-    assert!(!version().is_empty());
+#[cfg(test)]
+mod tests {
+    use super::{version};
+
+    #[test]
+    fn version_returns_non_empty_string() {
+        assert!(!version().is_empty());
+    }
 }
