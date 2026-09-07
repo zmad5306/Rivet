@@ -49,7 +49,22 @@ impl Record {
         self.payload.as_ref()
     }
 
+    fn check_len(len: usize, max: u32, error: StorageError) -> Result<u32, StorageError> {
+        match u32::try_from(len) {
+            Ok(l) => {
+                if l > max {
+                    return Err(error);
+                }
+                return Ok(l)
+            },
+            Err(_) => return Err(StorageError::LengthOverflow),
+        }
+    }
+
     pub fn encode(&self, limits: &RecordLimits) -> Result<Vec<u8>, StorageError> {
+        let key_len = self.key().as_ref().map_or(0, |key| key.len());
+        let key_length = Self::check_len(key_len, limits.max_key_bytes, StorageError::KeyTooLarge)?;
+        let payload_length = Self::check_len(self.payload.len(), limits.max_payload_bytes, StorageError::PaylodTooLarge)?;
 
     }
 
