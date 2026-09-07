@@ -108,7 +108,7 @@ impl Record {
 
         bytes.extend_from_slice(&checksum.to_be_bytes());
 
-        return Ok(bytes);
+        Ok(bytes)
     }
 
     pub fn decode(bytes: &[u8], limits: &RecordLimits) -> Result<(Self, usize), StorageError> {
@@ -704,5 +704,4 @@ mod tests {
         // On a 32-bit target, use permitted u32 header lengths whose combined record size overflows usize. Expect LengthOverflow without allocating a body. Gate this case by target width; two u32 lengths cannot overflow usize on a 64-bit target.
         todo!();
     }
-
 }
