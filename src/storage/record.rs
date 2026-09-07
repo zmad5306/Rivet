@@ -1,4 +1,8 @@
 use crate::error::StorageError;
+use crc32fast::hash;
+
+const MAGIC: &[u8; 4] = b"RIVT";
+const VERSION: u8 = 1;
 
 #[derive(Debug, PartialEq, Eq)]
 struct RecordLimits {
@@ -62,10 +66,29 @@ impl Record {
     }
 
     pub fn encode(&self, limits: &RecordLimits) -> Result<Vec<u8>, StorageError> {
+        let key_present = self.key().map_or(0, |key| 1);
         let key_len = self.key().as_ref().map_or(0, |key| key.len());
         let key_length = Self::check_len(key_len, limits.max_key_bytes, StorageError::KeyTooLarge)?;
-        let payload_length = Self::check_len(self.payload.len(), limits.max_payload_bytes, StorageError::PaylodTooLarge)?;
+        let payload_length = Self::check_len(self.payload().len(), limits.max_payload_bytes, StorageError::PaylodTooLarge)?;
+        let mut bytes: Vec<u8> = Vec::new();
 
+        bytes.extend_from_slice(MAGIC);
+        bytes.push(VERSION);
+        bytes.extend_from_slice(&self.offset().to_be_bytes());
+        bytes.extend_from_slice(&self.timestamp().to_be_bytes());
+        bytes.push(key_present);
+        bytes.extend_from_slice(&key_length.to_be_bytes());
+        bytes.extend_from_slice(&payload_length.to_be_bytes());
+        if let Some(key) = self.key() {
+            bytes.extend_from_slice(key);
+        }
+        bytes.extend_from_slice(self.payload());
+
+        let checksum = hash(&bytes[4..]);
+
+        bytes.extend_from_slice(&checksum.to_be_bytes());
+
+        return Ok(bytes);
     }
 
     pub fn decode(bytes: &[u8], limits: &RecordLimits) -> Result<(Self, usize), StorageError> {
