@@ -3,18 +3,19 @@ use crc32fast::hash;
 
 const MAGIC: &[u8; 4] = b"RIVT";
 const VERSION: u8 = 1;
+const HEADER_LENGTH: usize = 30;
 
 #[derive(Debug, PartialEq, Eq)]
-struct RecordLimits {
+pub struct RecordLimits {
     max_key_bytes: u32,
-    max_payload_bytes: u32
+    max_payload_bytes: u32,
 }
 
 impl Default for RecordLimits {
     fn default() -> Self {
         Self {
             max_key_bytes: 1024,
-            max_payload_bytes: 1024 * 1024
+            max_payload_bytes: 1024 * 1024,
         }
     }
 }
@@ -59,17 +60,36 @@ impl Record {
                 if l > max {
                     return Err(error);
                 }
-                return Ok(l)
-            },
+                return Ok(l);
+            }
             Err(_) => return Err(StorageError::LengthOverflow),
         }
     }
 
+    // Record format v1 (all integers big-endian):
+    // [0..4]   magic: b"RIVT"
+    // [4]      version: 1
+    // [5..13]  offset: u64
+    // [13..21] timestamp: u64
+    // [21]     key presence: 0 = absent, 1 = present
+    // [22..26] key length: u32
+    // [26..30] payload length: u32
+    // [30..]   key bytes, then payload bytes, then CRC32 checksum (u32)
+    //
+    // Absent keys require length 0; present keys may be empty.
+    // Header: 30 bytes. Total: 34 + key length + payload length.
+    // CRC32 covers version through payload, excluding magic and checksum.
+    // Slice ranges exclude the ending index.
+
     pub fn encode(&self, limits: &RecordLimits) -> Result<Vec<u8>, StorageError> {
-        let key_present = self.key().map_or(0, |key| 1);
+        let key_present = self.key().map_or(0, |_| 1);
         let key_len = self.key().as_ref().map_or(0, |key| key.len());
         let key_length = Self::check_len(key_len, limits.max_key_bytes, StorageError::KeyTooLarge)?;
-        let payload_length = Self::check_len(self.payload().len(), limits.max_payload_bytes, StorageError::PaylodTooLarge)?;
+        let payload_length = Self::check_len(
+            self.payload().len(),
+            limits.max_payload_bytes,
+            StorageError::PaylodTooLarge,
+        )?;
         let mut bytes: Vec<u8> = Vec::new();
 
         bytes.extend_from_slice(MAGIC);
@@ -92,7 +112,106 @@ impl Record {
     }
 
     pub fn decode(bytes: &[u8], limits: &RecordLimits) -> Result<(Self, usize), StorageError> {
+        if bytes.len() < HEADER_LENGTH {
+            return Err(StorageError::IncompleteHeader);
+        }
 
+        if &bytes[0..4] != MAGIC {
+            return Err(StorageError::InvalidMagic);
+        }
+
+        if bytes[4] != VERSION {
+            return Err(StorageError::UnsupportedVersion);
+        }
+
+        let offset_bytes: [u8; 8] = bytes[5..13]
+            .try_into()
+            .expect("header checked; offset slice is exactly eight bytes");
+
+        let timestamp_bytes: [u8; 8] = bytes[13..21]
+            .try_into()
+            .expect("header checked; timestamp slice is exactly eight bytes");
+
+        let key_length_bytes: [u8; 4] = bytes[22..26]
+            .try_into()
+            .expect("header checked; key length slice is exactly four bytes");
+
+        let payload_length_bytes: [u8; 4] = bytes[26..30]
+            .try_into()
+            .expect("header checked; payload length slice is exactly four bytes");
+
+        let key_present = bytes[21];
+        let offset = u64::from_be_bytes(offset_bytes);
+        let timestamp = u64::from_be_bytes(timestamp_bytes);
+        let key_length = u32::from_be_bytes(key_length_bytes);
+        let payload_length = u32::from_be_bytes(payload_length_bytes);
+
+        if key_present != 0 && key_present != 1 {
+            return Err(StorageError::InvalidKeyPresence);
+        }
+
+        if key_present == 0 && key_length > 0 {
+            return Err(StorageError::InvalidKeyLength);
+        }
+
+        if key_length > limits.max_key_bytes {
+            return Err(StorageError::KeyTooLarge);
+        }
+
+        if payload_length > limits.max_payload_bytes {
+            return Err(StorageError::PaylodTooLarge);
+        }
+
+        let key_len = match usize::try_from(key_length) {
+            Ok(len) => len,
+            Err(_) => return Err(StorageError::LengthOverflow),
+        };
+
+        let payload_len = match usize::try_from(payload_length) {
+            Ok(len) => len,
+            Err(_) => return Err(StorageError::LengthOverflow),
+        };
+
+        let key_end = match HEADER_LENGTH.checked_add(key_len) {
+            Some(end) => end,
+            None => return Err(StorageError::LengthOverflow),
+        };
+
+        let payload_end = match key_end.checked_add(payload_len) {
+            Some(end) => end,
+            None => return Err(StorageError::LengthOverflow),
+        };
+
+        let record_end = match payload_end.checked_add(4) {
+            Some(end) => end,
+            None => return Err(StorageError::LengthOverflow),
+        };
+
+        if bytes.len() < record_end {
+            return Err(StorageError::IncompleteBody);
+        }
+
+        let checksum_bytes: [u8; 4] = bytes[payload_end..record_end]
+            .try_into()
+            .expect("record bounds checked; checksum slice is exactly four bytes");
+
+        let checksum = u32::from_be_bytes(checksum_bytes);
+        let computed_checksum = hash(&bytes[4..payload_end]);
+
+        if checksum != computed_checksum {
+            return Err(StorageError::InvalidChecksum);
+        }
+
+        let key = if key_present == 1 {
+            Some(bytes[HEADER_LENGTH..key_end].to_vec())
+        } else {
+            None
+        };
+
+        let payload = bytes[key_end..payload_end].to_vec();
+        let record = Record::new(offset, timestamp, key, payload);
+
+        Ok((record, record_end))
     }
 }
 
@@ -451,4 +570,161 @@ mod tests {
 
         assert_ne!(input1, input2);
     }
+
+    // Codec exercises: remove #[ignore] and replace todo!() as each test is implemented.
+
+    #[test]
+    #[ignore = "codec test stub: implement before enabling"]
+    fn codec_round_trip_preserves_record() {
+        // Encode a record with a nonempty key and payload, decode it, and compare all fields via equality. Assert consumed bytes equals encoded length.
+        todo!();
+    }
+
+    #[test]
+    #[ignore = "codec test stub: implement before enabling"]
+    fn codec_encoding_matches_golden_bytes() {
+        // Compare encoding of a small known record against independently specified bytes, including flag, big-endian fields, and CRC32. Do not generate expected bytes with encode.
+        todo!();
+    }
+
+    #[test]
+    #[ignore = "codec test stub: implement before enabling"]
+    fn codec_encoding_is_deterministic() {
+        // Encode the same record twice and assert the buffers are identical.
+        todo!();
+    }
+
+    #[test]
+    #[ignore = "codec test stub: implement before enabling"]
+    fn codec_round_trip_preserves_absent_and_empty_keys() {
+        // Round-trip None and Some(vec![]) separately. Assert they remain distinct and their presence flags are 0 and 1.
+        todo!();
+    }
+
+    #[test]
+    #[ignore = "codec test stub: implement before enabling"]
+    fn codec_round_trip_preserves_empty_payload() {
+        // Round-trip a record with an empty payload and verify the consumed byte count includes the checksum.
+        todo!();
+    }
+
+    #[test]
+    #[ignore = "codec test stub: implement before enabling"]
+    fn codec_round_trip_preserves_binary_bytes() {
+        // Round-trip key and payload containing 0x00, 0x80, and 0xFF without text conversion.
+        todo!();
+    }
+
+    #[test]
+    #[ignore = "codec test stub: implement before enabling"]
+    fn codec_round_trip_preserves_integer_boundaries() {
+        // Round-trip offset and timestamp values of 0 and u64::MAX.
+        todo!();
+    }
+
+    #[test]
+    #[ignore = "codec test stub: implement before enabling"]
+    fn codec_decode_consumes_exactly_one_record() {
+        // Concatenate two encoded records. Decode the first, then decode the remainder using its consumed count. Assert both records and counts.
+        todo!();
+    }
+
+    #[test]
+    #[ignore = "codec test stub: implement before enabling"]
+    fn codec_decode_rejects_every_truncated_prefix() {
+        // For every proper prefix of a valid encoded record, expect IncompleteHeader below 30 bytes and IncompleteBody otherwise. Include missing checksum bytes.
+        todo!();
+    }
+
+    #[test]
+    #[ignore = "codec test stub: implement before enabling"]
+    fn codec_decode_rejects_invalid_magic() {
+        // Change a magic byte in a complete valid record and expect InvalidMagic.
+        todo!();
+    }
+
+    #[test]
+    #[ignore = "codec test stub: implement before enabling"]
+    fn codec_decode_rejects_unsupported_version() {
+        // Change the version byte and expect UnsupportedVersion before checksum validation.
+        todo!();
+    }
+
+    #[test]
+    #[ignore = "codec test stub: implement before enabling"]
+    fn codec_decode_rejects_invalid_key_presence() {
+        // Set the presence flag to 2 and 255 in complete records and expect InvalidKeyPresence.
+        todo!();
+    }
+
+    #[test]
+    #[ignore = "codec test stub: implement before enabling"]
+    fn codec_decode_rejects_absent_key_with_nonzero_length() {
+        // Set the flag to 0 while the key length is nonzero and expect InvalidKeyLength.
+        todo!();
+    }
+
+    #[test]
+    #[ignore = "codec test stub: implement before enabling"]
+    fn codec_accepts_lengths_at_configured_limits() {
+        // Use small custom limits and round-trip key and payload lengths exactly at their maxima. Also cover zero limits with empty fields.
+        todo!();
+    }
+
+    #[test]
+    #[ignore = "codec test stub: implement before enabling"]
+    fn codec_encode_rejects_key_over_limit() {
+        // Use a key one byte above a small configured maximum and expect KeyTooLarge.
+        todo!();
+    }
+
+    #[test]
+    #[ignore = "codec test stub: implement before enabling"]
+    fn codec_encode_rejects_payload_over_limit() {
+        // Use a payload one byte above a small configured maximum and expect the payload-too-large variant.
+        todo!();
+    }
+
+    #[test]
+    #[ignore = "codec test stub: implement before enabling"]
+    fn codec_decode_rejects_key_over_limit_before_body_allocation() {
+        // Supply a complete header claiming a key above the configured limit without supplying its body. Expect KeyTooLarge, not IncompleteBody.
+        todo!();
+    }
+
+    #[test]
+    #[ignore = "codec test stub: implement before enabling"]
+    fn codec_decode_rejects_payload_over_limit_before_body_allocation() {
+        // Supply a complete header claiming a payload above the configured limit without supplying its body. Expect the payload-too-large error.
+        todo!();
+    }
+
+    #[test]
+    #[ignore = "codec test stub: implement before enabling"]
+    fn codec_decode_rejects_corrupted_payload() {
+        // Flip a payload byte without updating the checksum and expect InvalidChecksum.
+        todo!();
+    }
+
+    #[test]
+    #[ignore = "codec test stub: implement before enabling"]
+    fn codec_decode_rejects_corrupted_checksum() {
+        // Flip a stored checksum byte in an otherwise valid record and expect InvalidChecksum.
+        todo!();
+    }
+
+    #[test]
+    #[ignore = "codec test stub: implement before enabling"]
+    fn codec_length_conversion_rejects_unrepresentable_length() {
+        // On targets where usize is wider than u32, call check_len with a length above u32::MAX and expect LengthOverflow without allocating a huge vector. Gate this case by target width.
+        todo!();
+    }
+
+    #[test]
+    #[ignore = "codec test stub: implement before enabling"]
+    fn codec_decode_rejects_record_size_overflow() {
+        // On a 32-bit target, use permitted u32 header lengths whose combined record size overflows usize. Expect LengthOverflow without allocating a body. Gate this case by target width; two u32 lengths cannot overflow usize on a 64-bit target.
+        todo!();
+    }
+
 }

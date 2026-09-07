@@ -12,5 +12,8 @@ pub enum StorageError {
     PaylodTooLarge,
     IncompleteHeader,
     IncompleteBody,
-    LengthOverflow    
+    LengthOverflow,
+    InvalidKeyPresence,
+    InvalidKeyLength,
+    InvalidChecksum,
 }
