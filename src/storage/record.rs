@@ -571,157 +571,135 @@ mod tests {
         assert_ne!(input1, input2);
     }
 
-    // Codec exercises: remove #[ignore] and replace todo!() as each test is implemented.
+    // Codec exercises: replace todo!() as each test is implemented.
 
     #[test]
-    #[ignore = "codec test stub: implement before enabling"]
     fn codec_round_trip_preserves_record() {
         // Encode a record with a nonempty key and payload, decode it, and compare all fields via equality. Assert consumed bytes equals encoded length.
         todo!();
     }
 
     #[test]
-    #[ignore = "codec test stub: implement before enabling"]
     fn codec_encoding_matches_golden_bytes() {
         // Compare encoding of a small known record against independently specified bytes, including flag, big-endian fields, and CRC32. Do not generate expected bytes with encode.
         todo!();
     }
 
     #[test]
-    #[ignore = "codec test stub: implement before enabling"]
     fn codec_encoding_is_deterministic() {
         // Encode the same record twice and assert the buffers are identical.
         todo!();
     }
 
     #[test]
-    #[ignore = "codec test stub: implement before enabling"]
     fn codec_round_trip_preserves_absent_and_empty_keys() {
         // Round-trip None and Some(vec![]) separately. Assert they remain distinct and their presence flags are 0 and 1.
         todo!();
     }
 
     #[test]
-    #[ignore = "codec test stub: implement before enabling"]
     fn codec_round_trip_preserves_empty_payload() {
         // Round-trip a record with an empty payload and verify the consumed byte count includes the checksum.
         todo!();
     }
 
     #[test]
-    #[ignore = "codec test stub: implement before enabling"]
     fn codec_round_trip_preserves_binary_bytes() {
         // Round-trip key and payload containing 0x00, 0x80, and 0xFF without text conversion.
         todo!();
     }
 
     #[test]
-    #[ignore = "codec test stub: implement before enabling"]
     fn codec_round_trip_preserves_integer_boundaries() {
         // Round-trip offset and timestamp values of 0 and u64::MAX.
         todo!();
     }
 
     #[test]
-    #[ignore = "codec test stub: implement before enabling"]
     fn codec_decode_consumes_exactly_one_record() {
         // Concatenate two encoded records. Decode the first, then decode the remainder using its consumed count. Assert both records and counts.
         todo!();
     }
 
     #[test]
-    #[ignore = "codec test stub: implement before enabling"]
     fn codec_decode_rejects_every_truncated_prefix() {
         // For every proper prefix of a valid encoded record, expect IncompleteHeader below 30 bytes and IncompleteBody otherwise. Include missing checksum bytes.
         todo!();
     }
 
     #[test]
-    #[ignore = "codec test stub: implement before enabling"]
     fn codec_decode_rejects_invalid_magic() {
         // Change a magic byte in a complete valid record and expect InvalidMagic.
         todo!();
     }
 
     #[test]
-    #[ignore = "codec test stub: implement before enabling"]
     fn codec_decode_rejects_unsupported_version() {
         // Change the version byte and expect UnsupportedVersion before checksum validation.
         todo!();
     }
 
     #[test]
-    #[ignore = "codec test stub: implement before enabling"]
     fn codec_decode_rejects_invalid_key_presence() {
         // Set the presence flag to 2 and 255 in complete records and expect InvalidKeyPresence.
         todo!();
     }
 
     #[test]
-    #[ignore = "codec test stub: implement before enabling"]
     fn codec_decode_rejects_absent_key_with_nonzero_length() {
         // Set the flag to 0 while the key length is nonzero and expect InvalidKeyLength.
         todo!();
     }
 
     #[test]
-    #[ignore = "codec test stub: implement before enabling"]
     fn codec_accepts_lengths_at_configured_limits() {
         // Use small custom limits and round-trip key and payload lengths exactly at their maxima. Also cover zero limits with empty fields.
         todo!();
     }
 
     #[test]
-    #[ignore = "codec test stub: implement before enabling"]
     fn codec_encode_rejects_key_over_limit() {
         // Use a key one byte above a small configured maximum and expect KeyTooLarge.
         todo!();
     }
 
     #[test]
-    #[ignore = "codec test stub: implement before enabling"]
     fn codec_encode_rejects_payload_over_limit() {
         // Use a payload one byte above a small configured maximum and expect the payload-too-large variant.
         todo!();
     }
 
     #[test]
-    #[ignore = "codec test stub: implement before enabling"]
     fn codec_decode_rejects_key_over_limit_before_body_allocation() {
         // Supply a complete header claiming a key above the configured limit without supplying its body. Expect KeyTooLarge, not IncompleteBody.
         todo!();
     }
 
     #[test]
-    #[ignore = "codec test stub: implement before enabling"]
     fn codec_decode_rejects_payload_over_limit_before_body_allocation() {
         // Supply a complete header claiming a payload above the configured limit without supplying its body. Expect the payload-too-large error.
         todo!();
     }
 
     #[test]
-    #[ignore = "codec test stub: implement before enabling"]
     fn codec_decode_rejects_corrupted_payload() {
         // Flip a payload byte without updating the checksum and expect InvalidChecksum.
         todo!();
     }
 
     #[test]
-    #[ignore = "codec test stub: implement before enabling"]
     fn codec_decode_rejects_corrupted_checksum() {
         // Flip a stored checksum byte in an otherwise valid record and expect InvalidChecksum.
         todo!();
     }
 
     #[test]
-    #[ignore = "codec test stub: implement before enabling"]
     fn codec_length_conversion_rejects_unrepresentable_length() {
         // On targets where usize is wider than u32, call check_len with a length above u32::MAX and expect LengthOverflow without allocating a huge vector. Gate this case by target width.
         todo!();
     }
 
     #[test]
-    #[ignore = "codec test stub: implement before enabling"]
     fn codec_decode_rejects_record_size_overflow() {
         // On a 32-bit target, use permitted u32 header lengths whose combined record size overflows usize. Expect LengthOverflow without allocating a body. Gate this case by target width; two u32 lengths cannot overflow usize on a 64-bit target.
         todo!();
