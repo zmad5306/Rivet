@@ -1,3 +1,20 @@
+use crate::error::StorageError;
+
+#[derive(Debug, PartialEq, Eq)]
+struct RecordLimits {
+    max_key_bytes: u32,
+    max_payload_bytes: u32
+}
+
+impl Default for RecordLimits {
+    fn default() -> Self {
+        Self {
+            max_key_bytes: 1024,
+            max_payload_bytes: 1024 * 1024
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub struct Record {
     offset: u64,
@@ -30,6 +47,14 @@ impl Record {
 
     pub fn payload(&self) -> &[u8] {
         self.payload.as_ref()
+    }
+
+    pub fn encode(&self, limits: &RecordLimits) -> Result<Vec<u8>, StorageError> {
+
+    }
+
+    pub fn decode(bytes: &[u8], limits: &RecordLimits) -> Result<(Self, usize), StorageError> {
+
     }
 }
 
