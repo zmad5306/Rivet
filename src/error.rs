@@ -5,7 +5,7 @@ pub enum PartitionError {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub enum StorageError {
+pub enum CodecError {
     InvalidMagic,
     UnsupportedVersion,
     KeyTooLarge,

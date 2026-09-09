@@ -1,4 +1,4 @@
-use crate::error::StorageError;
+use crate::error::CodecError;
 use crc32fast::hash;
 
 const MAGIC: &[u8; 4] = b"RIVT";
@@ -60,7 +60,7 @@ impl Record {
         self.payload.as_ref()
     }
 
-    fn check_len(len: usize, max: u32, error: StorageError) -> Result<u32, StorageError> {
+    fn check_len(len: usize, max: u32, error: CodecError) -> Result<u32, CodecError> {
         match u32::try_from(len) {
             Ok(l) => {
                 if l > max {
@@ -68,7 +68,7 @@ impl Record {
                 }
                 Ok(l)
             }
-            Err(_) => Err(StorageError::LengthOverflow),
+            Err(_) => Err(CodecError::LengthOverflow),
         }
     }
 
@@ -87,14 +87,14 @@ impl Record {
     // CRC32 covers version through payload, excluding magic and checksum.
     // Slice ranges exclude the ending index.
 
-    pub fn encode(&self, limits: &RecordLimits) -> Result<Vec<u8>, StorageError> {
+    pub fn encode(&self, limits: &RecordLimits) -> Result<Vec<u8>, CodecError> {
         let key_present = self.key().map_or(0, |_| 1);
         let key_len = self.key().as_ref().map_or(0, |key| key.len());
-        let key_length = Self::check_len(key_len, limits.max_key_bytes, StorageError::KeyTooLarge)?;
+        let key_length = Self::check_len(key_len, limits.max_key_bytes, CodecError::KeyTooLarge)?;
         let payload_length = Self::check_len(
             self.payload().len(),
             limits.max_payload_bytes,
-            StorageError::PayloadTooLarge,
+            CodecError::PayloadTooLarge,
         )?;
         let mut bytes: Vec<u8> = Vec::new();
 
@@ -117,17 +117,17 @@ impl Record {
         Ok(bytes)
     }
 
-    pub fn decode(bytes: &[u8], limits: &RecordLimits) -> Result<(Self, usize), StorageError> {
+    pub fn decode(bytes: &[u8], limits: &RecordLimits) -> Result<(Self, usize), CodecError> {
         if bytes.len() < HEADER_LENGTH {
-            return Err(StorageError::IncompleteHeader);
+            return Err(CodecError::IncompleteHeader);
         }
 
         if &bytes[0..4] != MAGIC {
-            return Err(StorageError::InvalidMagic);
+            return Err(CodecError::InvalidMagic);
         }
 
         if bytes[4] != VERSION {
-            return Err(StorageError::UnsupportedVersion);
+            return Err(CodecError::UnsupportedVersion);
         }
 
         let offset_bytes: [u8; 8] = bytes[5..13]
@@ -153,48 +153,48 @@ impl Record {
         let payload_length = u32::from_be_bytes(payload_length_bytes);
 
         if key_present != 0 && key_present != 1 {
-            return Err(StorageError::InvalidKeyPresence);
+            return Err(CodecError::InvalidKeyPresence);
         }
 
         if key_present == 0 && key_length > 0 {
-            return Err(StorageError::InvalidKeyLength);
+            return Err(CodecError::InvalidKeyLength);
         }
 
         if key_length > limits.max_key_bytes {
-            return Err(StorageError::KeyTooLarge);
+            return Err(CodecError::KeyTooLarge);
         }
 
         if payload_length > limits.max_payload_bytes {
-            return Err(StorageError::PayloadTooLarge);
+            return Err(CodecError::PayloadTooLarge);
         }
 
         let key_len = match usize::try_from(key_length) {
             Ok(len) => len,
-            Err(_) => return Err(StorageError::LengthOverflow),
+            Err(_) => return Err(CodecError::LengthOverflow),
         };
 
         let payload_len = match usize::try_from(payload_length) {
             Ok(len) => len,
-            Err(_) => return Err(StorageError::LengthOverflow),
+            Err(_) => return Err(CodecError::LengthOverflow),
         };
 
         let key_end = match HEADER_LENGTH.checked_add(key_len) {
             Some(end) => end,
-            None => return Err(StorageError::LengthOverflow),
+            None => return Err(CodecError::LengthOverflow),
         };
 
         let payload_end = match key_end.checked_add(payload_len) {
             Some(end) => end,
-            None => return Err(StorageError::LengthOverflow),
+            None => return Err(CodecError::LengthOverflow),
         };
 
         let record_end = match payload_end.checked_add(4) {
             Some(end) => end,
-            None => return Err(StorageError::LengthOverflow),
+            None => return Err(CodecError::LengthOverflow),
         };
 
         if bytes.len() < record_end {
-            return Err(StorageError::IncompleteBody);
+            return Err(CodecError::IncompleteBody);
         }
 
         let checksum_bytes: [u8; 4] = bytes[payload_end..record_end]
@@ -205,7 +205,7 @@ impl Record {
         let computed_checksum = hash(&bytes[4..payload_end]);
 
         if checksum != computed_checksum {
-            return Err(StorageError::InvalidChecksum);
+            return Err(CodecError::InvalidChecksum);
         }
 
         let key = if key_present == 1 {
@@ -248,7 +248,7 @@ impl PublishInput {
 #[cfg(test)]
 mod tests {
     use crate::{
-        error::StorageError,
+        error::CodecError,
         storage::record::{HEADER_LENGTH, RecordLimits},
     };
 
@@ -829,7 +829,7 @@ mod tests {
         for n in 0..30 {
             let truncated = &bytes[0..n];
             let result = Record::decode(truncated, &limits);
-            assert_eq!(result, Err(StorageError::IncompleteHeader));
+            assert_eq!(result, Err(CodecError::IncompleteHeader));
         }
     }
 
@@ -851,7 +851,7 @@ mod tests {
         for n in 30..(bytes.len() - 4) {
             let truncated = &bytes[0..n];
             let result = Record::decode(truncated, &limits);
-            assert_eq!(result, Err(StorageError::IncompleteBody));
+            assert_eq!(result, Err(CodecError::IncompleteBody));
             count += 1;
         }
 
@@ -877,7 +877,7 @@ mod tests {
         for n in (bytes.len() - 4)..bytes.len() {
             let truncated = &bytes[0..n];
             let result = Record::decode(truncated, &limits);
-            assert_eq!(result, Err(StorageError::IncompleteBody));
+            assert_eq!(result, Err(CodecError::IncompleteBody));
         }
     }
 
@@ -897,7 +897,7 @@ mod tests {
         bytes[0] = 0;
 
         let result = Record::decode(&bytes, &limits);
-        assert_eq!(result, Err(StorageError::InvalidMagic));
+        assert_eq!(result, Err(CodecError::InvalidMagic));
     }
 
     #[test]
@@ -916,7 +916,7 @@ mod tests {
         bytes[4] = 0xFF;
 
         let result = Record::decode(&bytes, &limits);
-        assert_eq!(result, Err(StorageError::UnsupportedVersion));
+        assert_eq!(result, Err(CodecError::UnsupportedVersion));
     }
 
     #[test]
@@ -935,7 +935,7 @@ mod tests {
         for n in 2..=255 {
             bytes[21] = n;
             let result = Record::decode(&bytes, &limits);
-            assert_eq!(result, Err(StorageError::InvalidKeyPresence));
+            assert_eq!(result, Err(CodecError::InvalidKeyPresence));
         }
     }
 
@@ -955,7 +955,7 @@ mod tests {
         bytes[21] = 0;
 
         let result = Record::decode(&bytes, &limits);
-        assert_eq!(result, Err(StorageError::InvalidKeyLength));
+        assert_eq!(result, Err(CodecError::InvalidKeyLength));
     }
 
     #[test]
@@ -988,7 +988,7 @@ mod tests {
 
         let result = record.encode(&limits);
 
-        assert_eq!(result, Err(StorageError::KeyTooLarge));
+        assert_eq!(result, Err(CodecError::KeyTooLarge));
     }
 
     #[test]
@@ -1002,7 +1002,7 @@ mod tests {
 
         let result = record.encode(&limits);
 
-        assert_eq!(result, Err(StorageError::PayloadTooLarge));
+        assert_eq!(result, Err(CodecError::PayloadTooLarge));
     }
 
     #[test]
@@ -1023,7 +1023,7 @@ mod tests {
         let buytes_truncated = &bytes[0..HEADER_LENGTH];
 
         let result = Record::decode(buytes_truncated, &limits);
-        assert_eq!(result, Err(StorageError::KeyTooLarge));
+        assert_eq!(result, Err(CodecError::KeyTooLarge));
     }
 
     #[test]
@@ -1043,7 +1043,7 @@ mod tests {
 
         let buytes_truncated = &bytes[0..HEADER_LENGTH];
         let result = Record::decode(buytes_truncated, &limits);
-        assert_eq!(result, Err(StorageError::PayloadTooLarge));
+        assert_eq!(result, Err(CodecError::PayloadTooLarge));
     }
 
     #[test]
@@ -1062,7 +1062,7 @@ mod tests {
         bytes[HEADER_LENGTH + 1] ^= 4;
 
         let result = Record::decode(&bytes, &limits);
-        assert_eq!(result, Err(StorageError::InvalidChecksum));
+        assert_eq!(result, Err(CodecError::InvalidChecksum));
     }
 
     #[test]
@@ -1083,7 +1083,7 @@ mod tests {
         bytes[len - 1] = 3;
 
         let result = Record::decode(&bytes, &limits);
-        assert_eq!(result, Err(StorageError::InvalidChecksum));
+        assert_eq!(result, Err(CodecError::InvalidChecksum));
     }
 
     #[test]
@@ -1091,9 +1091,9 @@ mod tests {
     fn codec_length_conversion_rejects_unrepresentable_length() {
         let len =
             usize::try_from(u32::MAX).expect("usize should be able to represent u32::MAX") + 1;
-        let result = Record::check_len(len, u32::MAX, StorageError::KeyTooLarge);
+        let result = Record::check_len(len, u32::MAX, CodecError::KeyTooLarge);
 
-        assert_eq!(result, Err(StorageError::LengthOverflow));
+        assert_eq!(result, Err(CodecError::LengthOverflow));
     }
 
     #[test]
@@ -1114,6 +1114,6 @@ mod tests {
         bytes[26..30].copy_from_slice(&1u32.to_be_bytes());
 
         let result = Record::decode(&bytes[0..HEADER_LENGTH], &limits);
-        assert_eq!(result, Err(StorageError::LengthOverflow));
+        assert_eq!(result, Err(CodecError::LengthOverflow));
     }
 }
