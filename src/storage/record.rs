@@ -22,10 +22,7 @@ impl RecordLimits {
 
 impl Default for RecordLimits {
     fn default() -> Self {
-        Self {
-            max_key_bytes: 1024,
-            max_payload_bytes: 1024 * 1024,
-        }
+        Self::new(1024, 1024 * 1024)
     }
 }
 
