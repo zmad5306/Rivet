@@ -654,9 +654,37 @@ mod tests {
     }
 
     #[test]
-    fn codec_round_trip_preserves_absent_and_empty_keys() {
-        // Round-trip None and Some(vec![]) separately. Assert they remain distinct and their presence flags are 0 and 1.
-        todo!();
+    fn codec_round_trip_preserves_absent_key() {
+        let offset: u64 = 0;
+        let timestamp: u64 = 1_700_000_000;
+        let key: Option<Vec<u8>> = None;
+        let payload: Vec<u8> = vec![1, 2, 3];
+        let limits = RecordLimits::default();
+        let record = Record::new(offset, timestamp, key, payload);
+
+        let bytes = record.encode(&limits).expect("record should encode successfully");
+        let key_present = bytes[21];
+        let (record_from_bytes, _) = Record::decode(&bytes, &limits).expect("record should decode successfully");
+
+        assert_eq!(key_present, 0);
+        assert_eq!(record_from_bytes.key(), None);
+    }
+
+    #[test]
+    fn codec_round_trip_preserves_empty_key() {
+        let offset: u64 = 0;
+        let timestamp: u64 = 1_700_000_000;
+        let key: Option<Vec<u8>> = Some(vec![]);
+        let payload: Vec<u8> = vec![1, 2, 3];
+        let limits = RecordLimits::default();
+        let record = Record::new(offset, timestamp, key, payload);
+
+        let bytes = record.encode(&limits).expect("record should encode successfully");
+        let key_present = bytes[21];
+        let (record_from_bytes, _) = Record::decode(&bytes, &limits).expect("record should decode successfully");
+
+        assert_eq!(key_present, 1);
+        assert_eq!(record_from_bytes.key(), Some(vec![]).as_deref());
     }
 
     #[test]
