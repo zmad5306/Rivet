@@ -1,3 +1,31 @@
+use crate::error::StorageError;
+use crc32fast::hash;
+
+const MAGIC: &[u8; 4] = b"RIVT";
+const VERSION: u8 = 1;
+const HEADER_LENGTH: usize = 30;
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct RecordLimits {
+    max_key_bytes: u32,
+    max_payload_bytes: u32,
+}
+
+impl RecordLimits {
+    pub fn new(max_key_bytes: u32, max_payload_bytes: u32) -> Self {
+        Self {
+            max_key_bytes,
+            max_payload_bytes,
+        }
+    }
+}
+
+impl Default for RecordLimits {
+    fn default() -> Self {
+        Self::new(1024, 1024 * 1024)
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub struct Record {
     offset: u64,
@@ -31,6 +59,166 @@ impl Record {
     pub fn payload(&self) -> &[u8] {
         self.payload.as_ref()
     }
+
+    fn check_len(len: usize, max: u32, error: StorageError) -> Result<u32, StorageError> {
+        match u32::try_from(len) {
+            Ok(l) => {
+                if l > max {
+                    return Err(error);
+                }
+                Ok(l)
+            }
+            Err(_) => Err(StorageError::LengthOverflow),
+        }
+    }
+
+    // Record format v1 (all integers big-endian):
+    // [0..4]   magic: b"RIVT"
+    // [4]      version: 1
+    // [5..13]  offset: u64
+    // [13..21] timestamp: u64
+    // [21]     key presence: 0 = absent, 1 = present
+    // [22..26] key length: u32
+    // [26..30] payload length: u32
+    // [30..]   key bytes, then payload bytes, then CRC32 checksum (u32)
+    //
+    // Absent keys require length 0; present keys may be empty.
+    // Header: 30 bytes. Total: 34 + key length + payload length.
+    // CRC32 covers version through payload, excluding magic and checksum.
+    // Slice ranges exclude the ending index.
+
+    pub fn encode(&self, limits: &RecordLimits) -> Result<Vec<u8>, StorageError> {
+        let key_present = self.key().map_or(0, |_| 1);
+        let key_len = self.key().as_ref().map_or(0, |key| key.len());
+        let key_length = Self::check_len(key_len, limits.max_key_bytes, StorageError::KeyTooLarge)?;
+        let payload_length = Self::check_len(
+            self.payload().len(),
+            limits.max_payload_bytes,
+            StorageError::PayloadTooLarge,
+        )?;
+        let mut bytes: Vec<u8> = Vec::new();
+
+        bytes.extend_from_slice(MAGIC);
+        bytes.push(VERSION);
+        bytes.extend_from_slice(&self.offset().to_be_bytes());
+        bytes.extend_from_slice(&self.timestamp().to_be_bytes());
+        bytes.push(key_present);
+        bytes.extend_from_slice(&key_length.to_be_bytes());
+        bytes.extend_from_slice(&payload_length.to_be_bytes());
+        if let Some(key) = self.key() {
+            bytes.extend_from_slice(key);
+        }
+        bytes.extend_from_slice(self.payload());
+
+        let checksum = hash(&bytes[4..]);
+
+        bytes.extend_from_slice(&checksum.to_be_bytes());
+
+        Ok(bytes)
+    }
+
+    pub fn decode(bytes: &[u8], limits: &RecordLimits) -> Result<(Self, usize), StorageError> {
+        if bytes.len() < HEADER_LENGTH {
+            return Err(StorageError::IncompleteHeader);
+        }
+
+        if &bytes[0..4] != MAGIC {
+            return Err(StorageError::InvalidMagic);
+        }
+
+        if bytes[4] != VERSION {
+            return Err(StorageError::UnsupportedVersion);
+        }
+
+        let offset_bytes: [u8; 8] = bytes[5..13]
+            .try_into()
+            .expect("header checked; offset slice is exactly eight bytes");
+
+        let timestamp_bytes: [u8; 8] = bytes[13..21]
+            .try_into()
+            .expect("header checked; timestamp slice is exactly eight bytes");
+
+        let key_length_bytes: [u8; 4] = bytes[22..26]
+            .try_into()
+            .expect("header checked; key length slice is exactly four bytes");
+
+        let payload_length_bytes: [u8; 4] = bytes[26..30]
+            .try_into()
+            .expect("header checked; payload length slice is exactly four bytes");
+
+        let key_present = bytes[21];
+        let offset = u64::from_be_bytes(offset_bytes);
+        let timestamp = u64::from_be_bytes(timestamp_bytes);
+        let key_length = u32::from_be_bytes(key_length_bytes);
+        let payload_length = u32::from_be_bytes(payload_length_bytes);
+
+        if key_present != 0 && key_present != 1 {
+            return Err(StorageError::InvalidKeyPresence);
+        }
+
+        if key_present == 0 && key_length > 0 {
+            return Err(StorageError::InvalidKeyLength);
+        }
+
+        if key_length > limits.max_key_bytes {
+            return Err(StorageError::KeyTooLarge);
+        }
+
+        if payload_length > limits.max_payload_bytes {
+            return Err(StorageError::PayloadTooLarge);
+        }
+
+        let key_len = match usize::try_from(key_length) {
+            Ok(len) => len,
+            Err(_) => return Err(StorageError::LengthOverflow),
+        };
+
+        let payload_len = match usize::try_from(payload_length) {
+            Ok(len) => len,
+            Err(_) => return Err(StorageError::LengthOverflow),
+        };
+
+        let key_end = match HEADER_LENGTH.checked_add(key_len) {
+            Some(end) => end,
+            None => return Err(StorageError::LengthOverflow),
+        };
+
+        let payload_end = match key_end.checked_add(payload_len) {
+            Some(end) => end,
+            None => return Err(StorageError::LengthOverflow),
+        };
+
+        let record_end = match payload_end.checked_add(4) {
+            Some(end) => end,
+            None => return Err(StorageError::LengthOverflow),
+        };
+
+        if bytes.len() < record_end {
+            return Err(StorageError::IncompleteBody);
+        }
+
+        let checksum_bytes: [u8; 4] = bytes[payload_end..record_end]
+            .try_into()
+            .expect("record bounds checked; checksum slice is exactly four bytes");
+
+        let checksum = u32::from_be_bytes(checksum_bytes);
+        let computed_checksum = hash(&bytes[4..payload_end]);
+
+        if checksum != computed_checksum {
+            return Err(StorageError::InvalidChecksum);
+        }
+
+        let key = if key_present == 1 {
+            Some(bytes[HEADER_LENGTH..key_end].to_vec())
+        } else {
+            None
+        };
+
+        let payload = bytes[key_end..payload_end].to_vec();
+        let record = Record::new(offset, timestamp, key, payload);
+
+        Ok((record, record_end))
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -59,6 +247,11 @@ impl PublishInput {
 
 #[cfg(test)]
 mod tests {
+    use crate::{
+        error::StorageError,
+        storage::record::{HEADER_LENGTH, RecordLimits},
+    };
+
     use super::{PublishInput, Record};
 
     #[test]
@@ -387,5 +580,540 @@ mod tests {
         let input2 = PublishInput::new(key2, payload2);
 
         assert_ne!(input1, input2);
+    }
+
+    // Codec exercises: replace todo!() as each test is implemented.
+
+    #[test]
+    fn codec_round_trip_preserves_record() {
+        let offset: u64 = 0;
+        let timestamp: u64 = 1_700_000_000;
+        let key: Option<Vec<u8>> = Some(vec![10, 20, 30]);
+        let expected_key: Option<&[u8]> = Some(&[10, 20, 30]);
+        let payload: Vec<u8> = vec![1, 2, 3];
+        let expected_payload: &[u8] = &[1, 2, 3];
+        let limits = RecordLimits::default();
+
+        let record = Record::new(offset, timestamp, key, payload);
+
+        let bytes = record
+            .encode(&limits)
+            .expect("record should encode successfully");
+
+        let (record_from_bytes, _) =
+            Record::decode(&bytes, &limits).expect("record should decode successfully");
+
+        assert_eq!(record, record_from_bytes);
+        assert_eq!(record_from_bytes.offset(), offset);
+        assert_eq!(record_from_bytes.timestamp(), timestamp);
+        assert_eq!(record_from_bytes.key(), expected_key);
+        assert_eq!(record_from_bytes.payload(), expected_payload);
+    }
+
+    #[test]
+    fn codec_encoding_matches_golden_bytes() {
+        let record = Record::new(
+            0x0102030405060708,
+            0x1112131415161718,
+            Some(vec![0xAA, 0xBB]),
+            vec![0x10, 0x20, 0x30],
+        );
+
+        let expected_bytes = [
+            0x52, 0x49, 0x56, 0x54, // Magic: RIVT
+            0x01, // Version
+            0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, // Offset
+            0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, // Timestamp
+            0x01, // Key present
+            0x00, 0x00, 0x00, 0x02, // Key length: 2
+            0x00, 0x00, 0x00, 0x03, // Payload length: 3
+            0xAA, 0xBB, // Key
+            0x10, 0x20, 0x30, // Payload
+            0x67, 0xAF, 0x80, 0x74, // CRC32
+        ];
+
+        let limits = RecordLimits::default();
+
+        let bytes = record
+            .encode(&limits)
+            .expect("record should encode successfully");
+
+        assert_eq!(bytes, expected_bytes);
+    }
+
+    #[test]
+    fn codec_encoding_is_deterministic() {
+        let offset: u64 = 0;
+        let timestamp: u64 = 1_700_000_000;
+        let key: Option<Vec<u8>> = Some(vec![10, 20, 30]);
+        let payload: Vec<u8> = vec![1, 2, 3];
+        let limits = RecordLimits::default();
+
+        let record = Record::new(offset, timestamp, key, payload);
+
+        let bytes1 = record
+            .encode(&limits)
+            .expect("record should encode successfully");
+
+        let bytes2 = record
+            .encode(&limits)
+            .expect("record should encode successfully");
+
+        assert_eq!(bytes1, bytes2);
+    }
+
+    #[test]
+    fn codec_round_trip_preserves_absent_key() {
+        let offset: u64 = 0;
+        let timestamp: u64 = 1_700_000_000;
+        let key: Option<Vec<u8>> = None;
+        let payload: Vec<u8> = vec![1, 2, 3];
+        let limits = RecordLimits::default();
+        let record = Record::new(offset, timestamp, key, payload);
+
+        let bytes = record
+            .encode(&limits)
+            .expect("record should encode successfully");
+        let key_present = bytes[21];
+        let (record_from_bytes, _) =
+            Record::decode(&bytes, &limits).expect("record should decode successfully");
+
+        assert_eq!(key_present, 0);
+        assert_eq!(record_from_bytes.key(), None);
+    }
+
+    #[test]
+    fn codec_round_trip_preserves_empty_key() {
+        let offset: u64 = 0;
+        let timestamp: u64 = 1_700_000_000;
+        let key: Option<Vec<u8>> = Some(vec![]);
+        let payload: Vec<u8> = vec![1, 2, 3];
+        let limits = RecordLimits::default();
+        let record = Record::new(offset, timestamp, key, payload);
+
+        let bytes = record
+            .encode(&limits)
+            .expect("record should encode successfully");
+        let key_present = bytes[21];
+        let (record_from_bytes, _) =
+            Record::decode(&bytes, &limits).expect("record should decode successfully");
+
+        assert_eq!(key_present, 1);
+        assert_eq!(record_from_bytes.key(), Some(vec![]).as_deref());
+    }
+
+    #[test]
+    fn codec_round_trip_preserves_empty_payload() {
+        let offset: u64 = 0;
+        let timestamp: u64 = 1_700_000_000;
+        let key: Option<Vec<u8>> = Some(vec![]);
+        let payload: Vec<u8> = vec![];
+        let limits = RecordLimits::default();
+        let record = Record::new(offset, timestamp, key, payload);
+
+        let bytes = record
+            .encode(&limits)
+            .expect("record should encode successfully");
+        let (record_from_bytes, consumed) =
+            Record::decode(&bytes, &limits).expect("record should decode successfully");
+
+        assert_eq!(record_from_bytes.payload(), &[]);
+        assert_eq!(consumed, bytes.len());
+    }
+
+    #[test]
+    fn codec_round_trip_preserves_binary_bytes() {
+        let offset: u64 = 0;
+        let timestamp: u64 = 1_700_000_000;
+        let key: Option<Vec<u8>> = Some(vec![]);
+        let payload: Vec<u8> = vec![0x00, 0x80, 0xFF];
+        let limits = RecordLimits::default();
+        let record = Record::new(offset, timestamp, key, payload);
+
+        let bytes = record
+            .encode(&limits)
+            .expect("record should encode successfully");
+        let (record_from_bytes, _) =
+            Record::decode(&bytes, &limits).expect("record should decode successfully");
+
+        assert_eq!(record_from_bytes.payload(), &[0x00, 0x80, 0xFF]);
+    }
+
+    #[test]
+    fn codec_round_trip_preserves_integer_boundaries_zero() {
+        let offset: u64 = 0;
+        let timestamp: u64 = 0;
+        let key: Option<Vec<u8>> = Some(vec![]);
+        let payload: Vec<u8> = vec![];
+        let limits = RecordLimits::default();
+        let record = Record::new(offset, timestamp, key, payload);
+
+        let bytes = record
+            .encode(&limits)
+            .expect("record should encode successfully");
+        let (record_from_bytes, _) =
+            Record::decode(&bytes, &limits).expect("record should decode successfully");
+
+        assert_eq!(record_from_bytes.offset(), 0);
+        assert_eq!(record_from_bytes.timestamp(), 0);
+    }
+
+    #[test]
+    fn codec_round_trip_preserves_integer_boundaries_max() {
+        let offset: u64 = u64::MAX;
+        let timestamp: u64 = u64::MAX;
+        let key: Option<Vec<u8>> = Some(vec![]);
+        let payload: Vec<u8> = vec![];
+        let limits = RecordLimits::default();
+        let record = Record::new(offset, timestamp, key, payload);
+
+        let bytes = record
+            .encode(&limits)
+            .expect("record should encode successfully");
+        let (record_from_bytes, _) =
+            Record::decode(&bytes, &limits).expect("record should decode successfully");
+
+        assert_eq!(record_from_bytes.offset(), u64::MAX);
+        assert_eq!(record_from_bytes.timestamp(), u64::MAX);
+    }
+
+    #[test]
+    fn codec_decode_consumes_exactly_one_record() {
+        let offset1: u64 = 0;
+        let timestamp1: u64 = 0;
+        let key1: Option<Vec<u8>> = Some(vec![]);
+        let payload1: Vec<u8> = vec![];
+        let record1 = Record::new(offset1, timestamp1, key1, payload1);
+
+        let offset2: u64 = u64::MAX;
+        let timestamp2: u64 = u64::MAX;
+        let key2: Option<Vec<u8>> = Some(vec![]);
+        let payload2: Vec<u8> = vec![];
+        let limits = RecordLimits::default();
+        let record2 = Record::new(offset2, timestamp2, key2, payload2);
+
+        let bytes1 = record1
+            .encode(&limits)
+            .expect("record should encode successfully");
+        let bytes2 = record2
+            .encode(&limits)
+            .expect("record should encode successfully");
+
+        let mut combined = bytes1;
+        combined.extend_from_slice(&bytes2);
+
+        let (record_from_bytes1, consumed1) =
+            Record::decode(&combined, &limits).expect("first record should decode successfully");
+
+        let (record_from_bytes2, consumed2) = Record::decode(&combined[consumed1..], &limits)
+            .expect("second record should decode successfully");
+
+        assert_eq!(record_from_bytes1, record1);
+        assert_eq!(record_from_bytes2, record2);
+        assert_eq!(consumed1 + consumed2, combined.len());
+    }
+
+    #[test]
+    fn codec_decode_rejects_every_truncated_prefix_header() {
+        let offset: u64 = u64::MAX;
+        let timestamp: u64 = u64::MAX;
+        let key: Option<Vec<u8>> = Some(vec![]);
+        let payload: Vec<u8> = vec![];
+        let limits = RecordLimits::default();
+        let record = Record::new(offset, timestamp, key, payload);
+
+        let bytes = record
+            .encode(&limits)
+            .expect("record should encode successfully");
+
+        for n in 0..30 {
+            let truncated = &bytes[0..n];
+            let result = Record::decode(truncated, &limits);
+            assert_eq!(result, Err(StorageError::IncompleteHeader));
+        }
+    }
+
+    #[test]
+    fn codec_decode_rejects_every_truncated_prefix_body() {
+        let offset: u64 = u64::MAX;
+        let timestamp: u64 = u64::MAX;
+        let key: Option<Vec<u8>> = Some(vec![1, 2, 3]);
+        let payload: Vec<u8> = vec![1, 2, 3];
+        let limits = RecordLimits::default();
+        let record = Record::new(offset, timestamp, key, payload);
+
+        let bytes = record
+            .encode(&limits)
+            .expect("record should encode successfully");
+
+        let mut count = 0;
+
+        for n in 30..(bytes.len() - 4) {
+            let truncated = &bytes[0..n];
+            let result = Record::decode(truncated, &limits);
+            assert_eq!(result, Err(StorageError::IncompleteBody));
+            count += 1;
+        }
+
+        assert!(
+            count > 0,
+            "test should have exercised at least one truncated body"
+        );
+    }
+
+    #[test]
+    fn codec_decode_rejects_every_truncated_prefix_checksum() {
+        let offset: u64 = u64::MAX;
+        let timestamp: u64 = u64::MAX;
+        let key: Option<Vec<u8>> = Some(vec![]);
+        let payload: Vec<u8> = vec![];
+        let limits = RecordLimits::default();
+        let record = Record::new(offset, timestamp, key, payload);
+
+        let bytes = record
+            .encode(&limits)
+            .expect("record should encode successfully");
+
+        for n in (bytes.len() - 4)..bytes.len() {
+            let truncated = &bytes[0..n];
+            let result = Record::decode(truncated, &limits);
+            assert_eq!(result, Err(StorageError::IncompleteBody));
+        }
+    }
+
+    #[test]
+    fn codec_decode_rejects_invalid_magic() {
+        let offset: u64 = u64::MAX;
+        let timestamp: u64 = u64::MAX;
+        let key: Option<Vec<u8>> = Some(vec![]);
+        let payload: Vec<u8> = vec![];
+        let limits = RecordLimits::default();
+        let record = Record::new(offset, timestamp, key, payload);
+
+        let mut bytes = record
+            .encode(&limits)
+            .expect("record should encode successfully");
+
+        bytes[0] = 0;
+
+        let result = Record::decode(&bytes, &limits);
+        assert_eq!(result, Err(StorageError::InvalidMagic));
+    }
+
+    #[test]
+    fn codec_decode_rejects_unsupported_version() {
+        let offset: u64 = u64::MAX;
+        let timestamp: u64 = u64::MAX;
+        let key: Option<Vec<u8>> = Some(vec![]);
+        let payload: Vec<u8> = vec![];
+        let limits = RecordLimits::default();
+        let record = Record::new(offset, timestamp, key, payload);
+
+        let mut bytes = record
+            .encode(&limits)
+            .expect("record should encode successfully");
+
+        bytes[4] = 0xFF;
+
+        let result = Record::decode(&bytes, &limits);
+        assert_eq!(result, Err(StorageError::UnsupportedVersion));
+    }
+
+    #[test]
+    fn codec_decode_rejects_invalid_key_presence() {
+        let offset: u64 = u64::MAX;
+        let timestamp: u64 = u64::MAX;
+        let key: Option<Vec<u8>> = Some(vec![]);
+        let payload: Vec<u8> = vec![];
+        let limits = RecordLimits::default();
+        let record = Record::new(offset, timestamp, key, payload);
+
+        let mut bytes = record
+            .encode(&limits)
+            .expect("record should encode successfully");
+
+        for n in 2..=255 {
+            bytes[21] = n;
+            let result = Record::decode(&bytes, &limits);
+            assert_eq!(result, Err(StorageError::InvalidKeyPresence));
+        }
+    }
+
+    #[test]
+    fn codec_decode_rejects_absent_key_with_nonzero_length() {
+        let offset: u64 = u64::MAX;
+        let timestamp: u64 = u64::MAX;
+        let key: Option<Vec<u8>> = Some(vec![1, 2, 3]);
+        let payload: Vec<u8> = vec![];
+        let limits = RecordLimits::default();
+        let record = Record::new(offset, timestamp, key, payload);
+
+        let mut bytes = record
+            .encode(&limits)
+            .expect("record should encode successfully");
+
+        bytes[21] = 0;
+
+        let result = Record::decode(&bytes, &limits);
+        assert_eq!(result, Err(StorageError::InvalidKeyLength));
+    }
+
+    #[test]
+    fn codec_accepts_lengths_at_configured_limits() {
+        let offset: u64 = u64::MAX;
+        let timestamp: u64 = u64::MAX;
+        let key: Option<Vec<u8>> = Some(vec![1, 2]);
+        let payload: Vec<u8> = vec![1, 2, 3];
+        let limits = RecordLimits::new(2, 3);
+        let record = Record::new(offset, timestamp, key, payload);
+
+        let bytes = record
+            .encode(&limits)
+            .expect("record should encode successfully");
+
+        let (record_from_bytes, _) =
+            Record::decode(&bytes, &limits).expect("record should decode successfully");
+
+        assert_eq!(record, record_from_bytes);
+    }
+
+    #[test]
+    fn codec_encode_rejects_key_over_limit() {
+        let offset: u64 = u64::MAX;
+        let timestamp: u64 = u64::MAX;
+        let key: Option<Vec<u8>> = Some(vec![1, 2, 3]);
+        let payload: Vec<u8> = vec![1, 2, 3];
+        let limits = RecordLimits::new(2, 3);
+        let record = Record::new(offset, timestamp, key, payload);
+
+        let result = record.encode(&limits);
+
+        assert_eq!(result, Err(StorageError::KeyTooLarge));
+    }
+
+    #[test]
+    fn codec_encode_rejects_payload_over_limit() {
+        let offset: u64 = u64::MAX;
+        let timestamp: u64 = u64::MAX;
+        let key: Option<Vec<u8>> = Some(vec![1, 2]);
+        let payload: Vec<u8> = vec![1, 2, 3, 4];
+        let limits = RecordLimits::new(2, 3);
+        let record = Record::new(offset, timestamp, key, payload);
+
+        let result = record.encode(&limits);
+
+        assert_eq!(result, Err(StorageError::PayloadTooLarge));
+    }
+
+    #[test]
+    fn codec_decode_rejects_key_over_limit_before_body_allocation() {
+        let offset: u64 = u64::MAX;
+        let timestamp: u64 = u64::MAX;
+        let key: Option<Vec<u8>> = Some(vec![]);
+        let payload: Vec<u8> = vec![];
+        let limits = RecordLimits::new(2, 3);
+        let record = Record::new(offset, timestamp, key, payload);
+
+        let mut bytes = record
+            .encode(&limits)
+            .expect("record should encode successfully");
+
+        bytes[22..26].copy_from_slice(&3u32.to_be_bytes());
+
+        let buytes_truncated = &bytes[0..HEADER_LENGTH];
+
+        let result = Record::decode(buytes_truncated, &limits);
+        assert_eq!(result, Err(StorageError::KeyTooLarge));
+    }
+
+    #[test]
+    fn codec_decode_rejects_payload_over_limit_before_body_allocation() {
+        let offset: u64 = u64::MAX;
+        let timestamp: u64 = u64::MAX;
+        let key: Option<Vec<u8>> = Some(vec![]);
+        let payload: Vec<u8> = vec![];
+        let limits = RecordLimits::new(2, 3);
+        let record = Record::new(offset, timestamp, key, payload);
+
+        let mut bytes = record
+            .encode(&limits)
+            .expect("record should encode successfully");
+
+        bytes[26..30].copy_from_slice(&4u32.to_be_bytes());
+
+        let buytes_truncated = &bytes[0..HEADER_LENGTH];
+        let result = Record::decode(buytes_truncated, &limits);
+        assert_eq!(result, Err(StorageError::PayloadTooLarge));
+    }
+
+    #[test]
+    fn codec_decode_rejects_corrupted_payload() {
+        let offset: u64 = u64::MAX;
+        let timestamp: u64 = u64::MAX;
+        let key: Option<Vec<u8>> = Some(vec![]);
+        let payload: Vec<u8> = vec![1, 2, 3];
+        let limits = RecordLimits::new(2, 3);
+        let record = Record::new(offset, timestamp, key, payload);
+
+        let mut bytes = record
+            .encode(&limits)
+            .expect("record should encode successfully");
+
+        bytes[HEADER_LENGTH + 1] ^= 4;
+
+        let result = Record::decode(&bytes, &limits);
+        assert_eq!(result, Err(StorageError::InvalidChecksum));
+    }
+
+    #[test]
+    fn codec_decode_rejects_corrupted_checksum() {
+        let offset: u64 = u64::MAX;
+        let timestamp: u64 = u64::MAX;
+        let key: Option<Vec<u8>> = Some(vec![]);
+        let payload: Vec<u8> = vec![1, 2, 3];
+        let limits = RecordLimits::new(2, 3);
+        let record = Record::new(offset, timestamp, key, payload);
+
+        let mut bytes = record
+            .encode(&limits)
+            .expect("record should encode successfully");
+
+        let len = bytes.len();
+
+        bytes[len - 1] = 3;
+
+        let result = Record::decode(&bytes, &limits);
+        assert_eq!(result, Err(StorageError::InvalidChecksum));
+    }
+
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn codec_length_conversion_rejects_unrepresentable_length() {
+        let len =
+            usize::try_from(u32::MAX).expect("usize should be able to represent u32::MAX") + 1;
+        let result = Record::check_len(len, u32::MAX, StorageError::KeyTooLarge);
+
+        assert_eq!(result, Err(StorageError::LengthOverflow));
+    }
+
+    #[test]
+    #[cfg(target_pointer_width = "32")]
+    fn codec_decode_rejects_record_size_overflow() {
+        let offset = u64::MAX;
+        let timestamp: u64 = u64::MAX;
+        let key: Option<Vec<u8>> = Some(vec![]);
+        let payload: Vec<u8> = vec![];
+        let limits = RecordLimits::new(u32::MAX, u32::MAX);
+        let record = Record::new(offset, timestamp, key, payload);
+
+        let mut bytes = record
+            .encode(&limits)
+            .expect("record should encode successfully");
+
+        bytes[22..26].copy_from_slice(&(u32::MAX - 30).to_be_bytes());
+        bytes[26..30].copy_from_slice(&1u32.to_be_bytes());
+
+        let result = Record::decode(&bytes[0..HEADER_LENGTH], &limits);
+        assert_eq!(result, Err(StorageError::LengthOverflow));
     }
 }

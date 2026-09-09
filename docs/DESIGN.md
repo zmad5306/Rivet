@@ -118,21 +118,31 @@ All integer fields use big-endian encoding.
 | version (`1`) | 1 byte |
 | offset | 8 bytes |
 | timestamp | 8 bytes |
+| key presence | 1 byte |
 | key length | 4 bytes |
 | value length | 4 bytes |
 | key | variable |
 | payload | variable |
 | checksum | 4 bytes |
 
-The checksum is CRC32 over `version`, `offset`, `timestamp`, `key_length`, `value_length`, `key`, and `payload`. It excludes the magic bytes and checksum field.
+The key-presence flag distinguishes an absent key from a present, empty key:
+
+- `0`: absent key (`None`); key length must be `0` and no key bytes follow.
+- `1`: present key (`Some`); key length is the actual byte length, including `0` for an empty key.
+- Any other flag value is invalid. An absent-key flag with a nonzero key length is also invalid.
+
+The fixed header is 30 bytes. Including the checksum, each record occupies `34 + key_length + value_length` bytes. Records are stored consecutively without separators.
+
+The checksum is CRC32 over `version`, `offset`, `timestamp`, `key_presence`, `key_length`, `value_length`, `key`, and `payload`, in that order. It excludes the magic bytes and checksum field.
 
 Reading validates:
 
 1. magic bytes;
 2. supported version;
-3. configured key and payload length limits before allocation;
-4. presence of the complete record;
-5. CRC32 equality.
+3. valid key-presence flag and consistency with the key length;
+4. configured key and payload length limits before allocation;
+5. presence of the complete record;
+6. CRC32 equality.
 
 An invalid record produces a typed storage error.
 
