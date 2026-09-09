@@ -9,7 +9,7 @@ pub enum StorageError {
     InvalidMagic,
     UnsupportedVersion,
     KeyTooLarge,
-    PaylodTooLarge,
+    PayloadTooLarge,
     IncompleteHeader,
     IncompleteBody,
     LengthOverflow,
