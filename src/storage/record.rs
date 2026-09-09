@@ -66,9 +66,9 @@ impl Record {
                 if l > max {
                     return Err(error);
                 }
-                return Ok(l);
+                Ok(l)
             }
-            Err(_) => return Err(StorageError::LengthOverflow),
+            Err(_) => Err(StorageError::LengthOverflow),
         }
     }
 
@@ -247,7 +247,10 @@ impl PublishInput {
 
 #[cfg(test)]
 mod tests {
-    use crate::{error::StorageError, storage::record::RecordLimits};
+    use crate::{
+        error::StorageError,
+        storage::record::{HEADER_LENGTH, RecordLimits},
+    };
 
     use super::{PublishInput, Record};
 
@@ -996,37 +999,113 @@ mod tests {
 
     #[test]
     fn codec_decode_rejects_key_over_limit_before_body_allocation() {
-        // Supply a complete header claiming a key above the configured limit without supplying its body. Expect KeyTooLarge, not IncompleteBody.
-        todo!();
+        let offset: u64 = u64::MAX;
+        let timestamp: u64 = u64::MAX;
+        let key: Option<Vec<u8>> = Some(vec![]);
+        let payload: Vec<u8> = vec![];
+        let limits = RecordLimits::new(2, 3);
+        let record = Record::new(offset, timestamp, key, payload);
+
+        let mut bytes = record
+            .encode(&limits)
+            .expect("record should encode successfully");
+
+        bytes[22..26].copy_from_slice(&3u32.to_be_bytes());
+
+        let buytes_truncated = &bytes[0..HEADER_LENGTH];
+
+        let result = Record::decode(buytes_truncated, &limits);
+        assert_eq!(result, Err(StorageError::KeyTooLarge));
     }
 
     #[test]
     fn codec_decode_rejects_payload_over_limit_before_body_allocation() {
-        // Supply a complete header claiming a payload above the configured limit without supplying its body. Expect the payload-too-large error.
-        todo!();
+        let offset: u64 = u64::MAX;
+        let timestamp: u64 = u64::MAX;
+        let key: Option<Vec<u8>> = Some(vec![]);
+        let payload: Vec<u8> = vec![];
+        let limits = RecordLimits::new(2, 3);
+        let record = Record::new(offset, timestamp, key, payload);
+
+        let mut bytes = record
+            .encode(&limits)
+            .expect("record should encode successfully");
+
+        bytes[26..30].copy_from_slice(&4u32.to_be_bytes());
+
+        let buytes_truncated = &bytes[0..HEADER_LENGTH];
+        let result = Record::decode(buytes_truncated, &limits);
+        assert_eq!(result, Err(StorageError::PayloadTooLarge));
     }
 
     #[test]
     fn codec_decode_rejects_corrupted_payload() {
-        // Flip a payload byte without updating the checksum and expect InvalidChecksum.
-        todo!();
+        let offset: u64 = u64::MAX;
+        let timestamp: u64 = u64::MAX;
+        let key: Option<Vec<u8>> = Some(vec![]);
+        let payload: Vec<u8> = vec![1, 2, 3];
+        let limits = RecordLimits::new(2, 3);
+        let record = Record::new(offset, timestamp, key, payload);
+
+        let mut bytes = record
+            .encode(&limits)
+            .expect("record should encode successfully");
+
+        bytes[HEADER_LENGTH + 1] ^= 4;
+
+        let result = Record::decode(&bytes, &limits);
+        assert_eq!(result, Err(StorageError::InvalidChecksum));
     }
 
     #[test]
     fn codec_decode_rejects_corrupted_checksum() {
-        // Flip a stored checksum byte in an otherwise valid record and expect InvalidChecksum.
-        todo!();
+        let offset: u64 = u64::MAX;
+        let timestamp: u64 = u64::MAX;
+        let key: Option<Vec<u8>> = Some(vec![]);
+        let payload: Vec<u8> = vec![1, 2, 3];
+        let limits = RecordLimits::new(2, 3);
+        let record = Record::new(offset, timestamp, key, payload);
+
+        let mut bytes = record
+            .encode(&limits)
+            .expect("record should encode successfully");
+
+        let len = bytes.len();
+
+        bytes[len - 1] = 3;
+
+        let result = Record::decode(&bytes, &limits);
+        assert_eq!(result, Err(StorageError::InvalidChecksum));
     }
 
     #[test]
+    #[cfg(target_pointer_width = "64")]
     fn codec_length_conversion_rejects_unrepresentable_length() {
-        // On targets where usize is wider than u32, call check_len with a length above u32::MAX and expect LengthOverflow without allocating a huge vector. Gate this case by target width.
-        todo!();
+        let len =
+            usize::try_from(u32::MAX).expect("usize should be able to represent u32::MAX") + 1;
+        let result = Record::check_len(len, u32::MAX, StorageError::KeyTooLarge);
+
+        assert_eq!(result, Err(StorageError::LengthOverflow));
     }
 
     #[test]
+    #[cfg(target_pointer_width = "32")]
     fn codec_decode_rejects_record_size_overflow() {
-        // On a 32-bit target, use permitted u32 header lengths whose combined record size overflows usize. Expect LengthOverflow without allocating a body. Gate this case by target width; two u32 lengths cannot overflow usize on a 64-bit target.
-        todo!();
+        let offset = u32::MAX;
+        let timestamp: u32 = u32::MAX;
+        let key: Option<Vec<u8>> = Some(vec![]);
+        let payload: Vec<u8> = vec![];
+        let limits = RecordLimits::new(u32::MAX, u32::MAX);
+        let record = Record::new(offset, timestamp, key, payload);
+
+        let mut bytes = record
+            .encode(&limits)
+            .expect("record should encode successfully");
+
+        bytes[22..26] = (u32::MAX - 30).to_be_bytes();
+        bytes[26..30] = 1;
+
+        let result = Record::decode(&bytes[0..HEADER_LENGTH], &limits);
+        assert_eq!(result, Err(StorageError::LengthOverflow));
     }
 }
