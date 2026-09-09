@@ -695,20 +695,77 @@ mod tests {
 
     #[test]
     fn codec_round_trip_preserves_empty_payload() {
-        // Round-trip a record with an empty payload and verify the consumed byte count includes the checksum.
-        todo!();
+        let offset: u64 = 0;
+        let timestamp: u64 = 1_700_000_000;
+        let key: Option<Vec<u8>> = Some(vec![]);
+        let payload: Vec<u8> = vec![];
+        let limits = RecordLimits::default();
+        let record = Record::new(offset, timestamp, key, payload);
+
+        let bytes = record
+            .encode(&limits)
+            .expect("record should encode successfully");
+        let (record_from_bytes, consumed) =
+            Record::decode(&bytes, &limits).expect("record should decode successfully");
+
+        assert_eq!(record_from_bytes.payload(), &[]);
+        assert_eq!(consumed, bytes.len());
     }
 
     #[test]
     fn codec_round_trip_preserves_binary_bytes() {
-        // Round-trip key and payload containing 0x00, 0x80, and 0xFF without text conversion.
-        todo!();
+        let offset: u64 = 0;
+        let timestamp: u64 = 1_700_000_000;
+        let key: Option<Vec<u8>> = Some(vec![]);
+        let payload: Vec<u8> = vec![0x00, 0x80, 0xFF];
+        let limits = RecordLimits::default();
+        let record = Record::new(offset, timestamp, key, payload);
+
+        let bytes = record
+            .encode(&limits)
+            .expect("record should encode successfully");
+        let (record_from_bytes, _) =
+            Record::decode(&bytes, &limits).expect("record should decode successfully");
+
+        assert_eq!(record_from_bytes.payload(), &[0x00, 0x80, 0xFF]);
     }
 
     #[test]
-    fn codec_round_trip_preserves_integer_boundaries() {
-        // Round-trip offset and timestamp values of 0 and u64::MAX.
-        todo!();
+    fn codec_round_trip_preserves_integer_boundaries_zero() {
+        let offset: u64 = 0;
+        let timestamp: u64 = 0;
+        let key: Option<Vec<u8>> = Some(vec![]);
+        let payload: Vec<u8> = vec![];
+        let limits = RecordLimits::default();
+        let record = Record::new(offset, timestamp, key, payload);
+
+        let bytes = record
+            .encode(&limits)
+            .expect("record should encode successfully");
+        let (record_from_bytes, _) =
+            Record::decode(&bytes, &limits).expect("record should decode successfully");
+
+        assert_eq!(record_from_bytes.offset(), 0);
+        assert_eq!(record_from_bytes.timestamp(), 0);
+    }
+
+    #[test]
+    fn codec_round_trip_preserves_integer_boundaries_max() {
+        let offset: u64 = u64::MAX;
+        let timestamp: u64 = u64::MAX;
+        let key: Option<Vec<u8>> = Some(vec![]);
+        let payload: Vec<u8> = vec![];
+        let limits = RecordLimits::default();
+        let record = Record::new(offset, timestamp, key, payload);
+
+        let bytes = record
+            .encode(&limits)
+            .expect("record should encode successfully");
+        let (record_from_bytes, _) =
+            Record::decode(&bytes, &limits).expect("record should decode successfully");
+
+        assert_eq!(record_from_bytes.offset(), u64::MAX);
+        assert_eq!(record_from_bytes.timestamp(), u64::MAX);
     }
 
     #[test]
