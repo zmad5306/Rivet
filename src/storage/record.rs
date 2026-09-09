@@ -241,6 +241,8 @@ impl PublishInput {
 
 #[cfg(test)]
 mod tests {
+    use crate::storage::record::RecordLimits;
+
     use super::{PublishInput, Record};
 
     #[test]
@@ -575,20 +577,80 @@ mod tests {
 
     #[test]
     fn codec_round_trip_preserves_record() {
-        // Encode a record with a nonempty key and payload, decode it, and compare all fields via equality. Assert consumed bytes equals encoded length.
-        todo!();
+        let offset: u64 = 0;
+        let timestamp: u64 = 1_700_000_000;
+        let key: Option<Vec<u8>> = Some(vec![10, 20, 30]);
+        let expected_key: Option<&[u8]> = Some(&[10, 20, 30]);
+        let payload: Vec<u8> = vec![1, 2, 3];
+        let expected_payload: &[u8] = &[1, 2, 3];
+        let limits = RecordLimits::default();
+
+        let record = Record::new(offset, timestamp, key, payload);
+
+        let bytes = record
+            .encode(&limits)
+            .expect("record should encode successfully");
+
+        let (record_from_bytes, _) =
+            Record::decode(&bytes, &limits).expect("record should decode successfully");
+
+        assert_eq!(record, record_from_bytes);
+        assert_eq!(record_from_bytes.offset(), offset);
+        assert_eq!(record_from_bytes.timestamp(), timestamp);
+        assert_eq!(record_from_bytes.key(), expected_key);
+        assert_eq!(record_from_bytes.payload(), expected_payload);
     }
 
     #[test]
     fn codec_encoding_matches_golden_bytes() {
-        // Compare encoding of a small known record against independently specified bytes, including flag, big-endian fields, and CRC32. Do not generate expected bytes with encode.
-        todo!();
+        let record = Record::new(
+            0x0102030405060708,
+            0x1112131415161718,
+            Some(vec![0xAA, 0xBB]),
+            vec![0x10, 0x20, 0x30],
+        );
+
+        let expected_bytes = [
+            0x52, 0x49, 0x56, 0x54, // Magic: RIVT
+            0x01, // Version
+            0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, // Offset
+            0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, // Timestamp
+            0x01, // Key present
+            0x00, 0x00, 0x00, 0x02, // Key length: 2
+            0x00, 0x00, 0x00, 0x03, // Payload length: 3
+            0xAA, 0xBB, // Key
+            0x10, 0x20, 0x30, // Payload
+            0x67, 0xAF, 0x80, 0x74, // CRC32
+        ];
+
+        let limits = RecordLimits::default();
+
+        let bytes = record
+            .encode(&limits)
+            .expect("record should encode successfully");
+
+        assert_eq!(bytes, expected_bytes);
     }
 
     #[test]
     fn codec_encoding_is_deterministic() {
-        // Encode the same record twice and assert the buffers are identical.
-        todo!();
+                let offset: u64 = 0;
+        let timestamp: u64 = 1_700_000_000;
+        let key: Option<Vec<u8>> = Some(vec![10, 20, 30]);
+        let payload: Vec<u8> = vec![1, 2, 3];
+        let limits = RecordLimits::default();
+
+        let record = Record::new(offset, timestamp, key, payload);
+
+        let bytes1 = record
+            .encode(&limits)
+            .expect("record should encode successfully");
+
+        let bytes2 = record
+            .encode(&limits)
+            .expect("record should encode successfully");
+
+        assert_eq!(bytes1, bytes2);
     }
 
     #[test]
