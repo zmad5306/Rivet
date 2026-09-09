@@ -1091,8 +1091,8 @@ mod tests {
     #[test]
     #[cfg(target_pointer_width = "32")]
     fn codec_decode_rejects_record_size_overflow() {
-        let offset = u32::MAX;
-        let timestamp: u32 = u32::MAX;
+        let offset = u64::MAX;
+        let timestamp: u64 = u64::MAX;
         let key: Option<Vec<u8>> = Some(vec![]);
         let payload: Vec<u8> = vec![];
         let limits = RecordLimits::new(u32::MAX, u32::MAX);
@@ -1102,8 +1102,8 @@ mod tests {
             .encode(&limits)
             .expect("record should encode successfully");
 
-        bytes[22..26] = (u32::MAX - 30).to_be_bytes();
-        bytes[26..30] = 1;
+        bytes[22..26].copy_from_slice(&(u32::MAX - 30).to_be_bytes());
+        bytes[26..30].copy_from_slice(&1u32.to_be_bytes());
 
         let result = Record::decode(&bytes[0..HEADER_LENGTH], &limits);
         assert_eq!(result, Err(StorageError::LengthOverflow));
