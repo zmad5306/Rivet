@@ -634,7 +634,7 @@ mod tests {
 
     #[test]
     fn codec_encoding_is_deterministic() {
-                let offset: u64 = 0;
+        let offset: u64 = 0;
         let timestamp: u64 = 1_700_000_000;
         let key: Option<Vec<u8>> = Some(vec![10, 20, 30]);
         let payload: Vec<u8> = vec![1, 2, 3];
@@ -662,9 +662,12 @@ mod tests {
         let limits = RecordLimits::default();
         let record = Record::new(offset, timestamp, key, payload);
 
-        let bytes = record.encode(&limits).expect("record should encode successfully");
+        let bytes = record
+            .encode(&limits)
+            .expect("record should encode successfully");
         let key_present = bytes[21];
-        let (record_from_bytes, _) = Record::decode(&bytes, &limits).expect("record should decode successfully");
+        let (record_from_bytes, _) =
+            Record::decode(&bytes, &limits).expect("record should decode successfully");
 
         assert_eq!(key_present, 0);
         assert_eq!(record_from_bytes.key(), None);
@@ -679,9 +682,12 @@ mod tests {
         let limits = RecordLimits::default();
         let record = Record::new(offset, timestamp, key, payload);
 
-        let bytes = record.encode(&limits).expect("record should encode successfully");
+        let bytes = record
+            .encode(&limits)
+            .expect("record should encode successfully");
         let key_present = bytes[21];
-        let (record_from_bytes, _) = Record::decode(&bytes, &limits).expect("record should decode successfully");
+        let (record_from_bytes, _) =
+            Record::decode(&bytes, &limits).expect("record should decode successfully");
 
         assert_eq!(key_present, 1);
         assert_eq!(record_from_bytes.key(), Some(vec![]).as_deref());
