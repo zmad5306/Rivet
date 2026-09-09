@@ -241,7 +241,7 @@ impl PublishInput {
 
 #[cfg(test)]
 mod tests {
-    use crate::storage::record::RecordLimits;
+    use crate::{error::StorageError, storage::record::RecordLimits};
 
     use super::{PublishInput, Record};
 
@@ -805,9 +805,63 @@ mod tests {
     }
 
     #[test]
-    fn codec_decode_rejects_every_truncated_prefix() {
-        // For every proper prefix of a valid encoded record, expect IncompleteHeader below 30 bytes and IncompleteBody otherwise. Include missing checksum bytes.
-        todo!();
+    fn codec_decode_rejects_every_truncated_prefix_header() {
+        let offset: u64 = u64::MAX;
+        let timestamp: u64 = u64::MAX;
+        let key: Option<Vec<u8>> = Some(vec![]);
+        let payload: Vec<u8> = vec![];
+        let limits = RecordLimits::default();
+        let record = Record::new(offset, timestamp, key, payload);
+
+        let bytes = record
+            .encode(&limits)
+            .expect("record should encode successfully");
+
+        for n in 0..30 {
+            let truncated = &bytes[0..n];
+            let result = Record::decode(truncated, &limits);
+            assert_eq!(result, Err(StorageError::IncompleteHeader));
+        }
+    }
+
+    #[test]
+    fn codec_decode_rejects_every_truncated_prefix_body() {
+        let offset: u64 = u64::MAX;
+        let timestamp: u64 = u64::MAX;
+        let key: Option<Vec<u8>> = Some(vec![]);
+        let payload: Vec<u8> = vec![];
+        let limits = RecordLimits::default();
+        let record = Record::new(offset, timestamp, key, payload);
+
+        let bytes = record
+            .encode(&limits)
+            .expect("record should encode successfully");
+
+        for n in 30..(bytes.len() - 4) {
+            let truncated = &bytes[0..n];
+            let result = Record::decode(truncated, &limits);
+            assert_eq!(result, Err(StorageError::IncompleteBody));
+        }
+    }
+
+    #[test]
+    fn codec_decode_rejects_every_truncated_prefix_checksum() {
+        let offset: u64 = u64::MAX;
+        let timestamp: u64 = u64::MAX;
+        let key: Option<Vec<u8>> = Some(vec![]);
+        let payload: Vec<u8> = vec![];
+        let limits = RecordLimits::default();
+        let record = Record::new(offset, timestamp, key, payload);
+
+        let bytes = record
+            .encode(&limits)
+            .expect("record should encode successfully");
+
+        for n in (bytes.len() - 4)..bytes.len() {
+            let truncated = &bytes[0..n];
+            let result = Record::decode(truncated, &limits);
+            assert_eq!(result, Err(StorageError::IncompleteBody));
+        }
     }
 
     #[test]
