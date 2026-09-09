@@ -770,8 +770,38 @@ mod tests {
 
     #[test]
     fn codec_decode_consumes_exactly_one_record() {
-        // Concatenate two encoded records. Decode the first, then decode the remainder using its consumed count. Assert both records and counts.
-        todo!();
+        let offset1: u64 = 0;
+        let timestamp1: u64 = 0;
+        let key1: Option<Vec<u8>> = Some(vec![]);
+        let payload1: Vec<u8> = vec![];
+        let record1 = Record::new(offset1, timestamp1, key1, payload1);
+
+        let offset2: u64 = u64::MAX;
+        let timestamp2: u64 = u64::MAX;
+        let key2: Option<Vec<u8>> = Some(vec![]);
+        let payload2: Vec<u8> = vec![];
+        let limits = RecordLimits::default();
+        let record2 = Record::new(offset2, timestamp2, key2, payload2);
+
+        let bytes1 = record1
+            .encode(&limits)
+            .expect("record should encode successfully");
+        let bytes2 = record2
+            .encode(&limits)
+            .expect("record should encode successfully");
+
+        let mut combined = bytes1;
+        combined.extend_from_slice(&bytes2);
+
+        let (record_from_bytes1, consumed1) =
+            Record::decode(&combined, &limits).expect("first record should decode successfully");
+
+        let (record_from_bytes2, consumed2) = Record::decode(&combined[consumed1..], &limits)
+            .expect("second record should decode successfully");
+
+        assert_eq!(record_from_bytes1, record1);
+        assert_eq!(record_from_bytes2, record2);
+        assert_eq!(consumed1 + consumed2, combined.len());
     }
 
     #[test]
