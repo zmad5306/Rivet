@@ -837,8 +837,8 @@ mod tests {
     fn codec_decode_rejects_every_truncated_prefix_body() {
         let offset: u64 = u64::MAX;
         let timestamp: u64 = u64::MAX;
-        let key: Option<Vec<u8>> = Some(vec![]);
-        let payload: Vec<u8> = vec![];
+        let key: Option<Vec<u8>> = Some(vec![1, 2, 3]);
+        let payload: Vec<u8> = vec![1, 2, 3];
         let limits = RecordLimits::default();
         let record = Record::new(offset, timestamp, key, payload);
 
@@ -846,11 +846,19 @@ mod tests {
             .encode(&limits)
             .expect("record should encode successfully");
 
+        let mut count = 0;
+
         for n in 30..(bytes.len() - 4) {
             let truncated = &bytes[0..n];
             let result = Record::decode(truncated, &limits);
             assert_eq!(result, Err(StorageError::IncompleteBody));
+            count += 1;
         }
+
+        assert!(
+            count > 0,
+            "test should have exercised at least one truncated body"
+        );
     }
 
     #[test]
