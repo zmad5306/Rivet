@@ -418,6 +418,7 @@ fn scanning_partial_header_returns_incomplete_header() {
     let mut record_bytes = record1
         .encode(&RecordLimits::default())
         .expect("encoding the first record should succeed");
+
     record_bytes.extend_from_slice(
         &record2
             .encode(&RecordLimits::default())
@@ -475,6 +476,7 @@ fn scanning_partial_body_returns_incomplete_body() {
     let mut record_bytes = record1
         .encode(&RecordLimits::default())
         .expect("encoding the first record should succeed");
+    
     record_bytes.extend_from_slice(
         &record2
             .encode(&RecordLimits::default())
@@ -532,6 +534,7 @@ fn scanning_partial_checksum_returns_incomplete_body() {
     let mut record_bytes = record1
         .encode(&RecordLimits::default())
         .expect("encoding the first record should succeed");
+
     record_bytes.extend_from_slice(
         &record2
             .encode(&RecordLimits::default())
