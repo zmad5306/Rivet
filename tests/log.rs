@@ -413,6 +413,7 @@ fn scanning_partial_header_returns_incomplete_header() {
 
     let dir = tempfile::tempdir().expect("temporary directory should be created");
     let path = dir.path().join("partial-header.log");
+    
     write(&path, &record_bytes)
         .expect("writing a complete record followed by a partial header should succeed");
 
@@ -455,9 +456,16 @@ fn scanning_partial_header_returns_incomplete_header() {
 }
 
 #[test]
-fn scanning_partial_body_or_checksum_returns_incomplete_body() {
+fn scanning_partial_body_returns_incomplete_body() {
     todo!(
-        "Exercise truncation within the body and checksum; verify the wrapped IncompleteBody error"
+        "Exercise truncation within the body; verify the wrapped IncompleteBody error"
+    );
+}
+
+#[test]
+fn scanning_partial_checksum_returns_incomplete_body() {
+    todo!(
+        "Exercise truncation within the checksum; verify the wrapped IncompleteBody error"
     );
 }
 
