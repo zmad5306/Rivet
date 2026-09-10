@@ -413,7 +413,7 @@ fn scanning_partial_header_returns_incomplete_header() {
 
     let dir = tempfile::tempdir().expect("temporary directory should be created");
     let path = dir.path().join("partial-header.log");
-    
+
     write(&path, &record_bytes)
         .expect("writing a complete record followed by a partial header should succeed");
 
@@ -457,21 +457,160 @@ fn scanning_partial_header_returns_incomplete_header() {
 
 #[test]
 fn scanning_partial_body_returns_incomplete_body() {
-    todo!(
-        "Exercise truncation within the body; verify the wrapped IncompleteBody error"
+    let record1 = sample_record(0);
+    let record2 = sample_record(1);
+    let mut record_bytes = record1
+        .encode(&RecordLimits::default())
+        .expect("encoding the first record should succeed");
+    record_bytes.extend_from_slice(
+        &record2
+            .encode(&RecordLimits::default())
+            .expect("encoding the second record should succeed")[..34],
+    );
+
+    let dir = tempfile::tempdir().expect("temporary directory should be created");
+    let path = dir.path().join("partial-body.log");
+
+    write(&path, &record_bytes)
+        .expect("writing a complete record followed by a partial body should succeed");
+
+    let log = Log::open(&path, RecordLimits::default())
+        .expect("opening the log with a partial body should succeed");
+
+    let mut scanner = log
+        .scan()
+        .expect("creating a scanner for the log with a partial body should succeed");
+
+    let record1_from_log = match scanner.next() {
+        Some(Ok(record)) => record,
+        Some(Err(error)) => panic!("expected the first record, got error: {:?}", error),
+        None => panic!("expected the first record, got None"),
+    };
+
+    assert_eq!(
+        record1_from_log, record1,
+        "the first record read from the log should match the first record written"
+    );
+
+    let error = match scanner.next() {
+        Some(Err(error)) => error,
+        Some(Ok(record)) => panic!(
+            "expected an incomplete body error, got a valid record: {:?}",
+            record
+        ),
+        None => panic!("expected an incomplete body error, got None"),
+    };
+
+    assert!(matches!(
+        error,
+        StorageError::Codec(CodecError::IncompleteBody)
+    ));
+
+    assert!(
+        scanner.next().is_none(),
+        "expected no more records after the incomplete body"
     );
 }
 
 #[test]
 fn scanning_partial_checksum_returns_incomplete_body() {
-    todo!(
-        "Exercise truncation within the checksum; verify the wrapped IncompleteBody error"
+    let record1 = sample_record(0);
+    let record2 = sample_record(1);
+    let mut record_bytes = record1
+        .encode(&RecordLimits::default())
+        .expect("encoding the first record should succeed");
+    record_bytes.extend_from_slice(
+        &record2
+            .encode(&RecordLimits::default())
+            .expect("encoding the second record should succeed")[..38],
+    );
+
+    let dir = tempfile::tempdir().expect("temporary directory should be created");
+    let path = dir.path().join("partial-checksum.log");
+
+    write(&path, &record_bytes)
+        .expect("writing a complete record followed by a partial checksum should succeed");
+
+    let log = Log::open(&path, RecordLimits::default())
+        .expect("opening the log with a partial checksum should succeed");
+
+    let mut scanner = log
+        .scan()
+        .expect("creating a scanner for the log with a partial checksum should succeed");
+
+    let record1_from_log = match scanner.next() {
+        Some(Ok(record)) => record,
+        Some(Err(error)) => panic!("expected the first record, got error: {:?}", error),
+        None => panic!("expected the first record, got None"),
+    };
+
+    assert_eq!(
+        record1_from_log, record1,
+        "the first record read from the log should match the first record written"
+    );
+
+    let error = match scanner.next() {
+        Some(Err(error)) => error,
+        Some(Ok(record)) => panic!(
+            "expected an incomplete checksum error, got a valid record: {:?}",
+            record
+        ),
+        None => panic!("expected an incomplete checksum error, got None"),
+    };
+
+    assert!(matches!(
+        error,
+        StorageError::Codec(CodecError::IncompleteBody)
+    ));
+
+    assert!(
+        scanner.next().is_none(),
+        "expected no more records after the incomplete checksum"
     );
 }
 
 #[test]
 fn scanning_corrupt_record_preserves_codec_error() {
-    todo!(
-        "Corrupt an encoded record's payload; verify the scan reports wrapped InvalidChecksum and exposes its source"
+    let record = sample_record(0);
+    let mut record_bytes = record
+        .encode(&RecordLimits::default())
+        .expect("encoding the first record should succeed");
+
+    record_bytes[33] ^= 0x01;
+
+    let dir = tempfile::tempdir().expect("temporary directory should be created");
+    let path = dir.path().join("corrupt.log");
+
+    write(&path, &record_bytes).expect("writing the corrupt record should succeed");
+
+    let log = Log::open(&path, RecordLimits::default())
+        .expect("opening the log with a corrupt record should succeed");
+
+    let mut scanner = log
+        .scan()
+        .expect("creating a scanner for the log with a corrupt record should succeed");
+
+    let error = match scanner.next() {
+        Some(Err(error)) => error,
+        Some(Ok(record)) => panic!(
+            "expected a corrupt record error, got a valid record: {:?}",
+            record
+        ),
+        None => panic!("expected a corrupt record error, got None"),
+    };
+
+    assert!(
+        matches!(error, StorageError::Codec(CodecError::InvalidChecksum)),
+        "expected a corrupt record error with an invalid checksum"
+    );
+
+    assert!(matches!(
+        error,
+        StorageError::Codec(CodecError::InvalidChecksum)
+    ));
+
+    assert!(
+        scanner.next().is_none(),
+        "expected no more records after the corrupt record"
     );
 }
