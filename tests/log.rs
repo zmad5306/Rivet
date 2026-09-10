@@ -630,8 +630,46 @@ fn scanning_corrupt_record_preserves_codec_error() {
 
 #[test]
 fn codec_rejection_allows_later_valid_appends() {
-    todo!(
-        "Append a valid record, reject an oversized record during encoding, then append another valid record; verify scanning yields exactly the two valid records in order"
+    let limits = RecordLimits::new(3, 3);
+    let record1 = sample_record(0);
+    let oversized_key_record =
+        record_with_fields(1, 1_700_000_000, Some(vec![10, 20, 30, 40]), vec![1, 2, 3]);
+    let oversized_payload_record =
+        record_with_fields(1, 1_700_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3, 4]);
+    let record2 = sample_record(2);
+    let dir = tempfile::tempdir().expect("temporary directory should be created");
+    let path = dir.path().join("limits.log");
+    let mut log = Log::open(&path, limits).expect("opening the log should succeed");
+
+    log.append(&record1)
+        .expect("appending the first valid record should succeed");
+    let error1 = log
+        .append(&oversized_key_record)
+        .expect_err("appending a record with oversized key should fail");
+    let error2 = log
+        .append(&oversized_payload_record)
+        .expect_err("appending a record with oversized payload should fail");
+    log.append(&record2)
+        .expect("appending the second valid record should succeed");
+
+    assert!(
+        matches!(error1, StorageError::Codec(CodecError::KeyTooLarge)),
+        "expected a key too large error"
+    );
+    assert!(
+        matches!(error2, StorageError::Codec(CodecError::PayloadTooLarge)),
+        "expected a payload too large error"
+    );
+
+    let scanner = log
+        .scan()
+        .expect("creating a scanner for the log should succeed");
+    let records: Vec<_> = scanner.filter_map(Result::ok).collect();
+
+    assert_eq!(
+        records,
+        vec![record1, record2],
+        "expected exactly the two valid records in order"
     );
 }
 
