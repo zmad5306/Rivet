@@ -220,6 +220,7 @@ impl Log {
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
 
     struct FailAfterBytes {
@@ -382,8 +383,85 @@ mod tests {
 
     #[test]
     fn scanning_after_append_failure_preserves_valid_prefix() {
-        todo!(
-            "Append a valid record, inject a partial write failure during the next append, then scan the failed log; verify the valid record remains readable, the partial record produces the appropriate incomplete-record error, and the scanner then yields None"
+        let record1 = Record::new(0, 1_700_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3]);
+        let record2 = Record::new(0, 1_700_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3]);
+        let record1_bytes = record1
+            .encode(&RecordLimits::default())
+            .expect("encoding the record should succeed");
+        let record2_bytes = record2
+            .encode(&RecordLimits::default())
+            .expect("encoding the record should succeed");
+        let mut writer = FailAfterBytes {
+            written: Vec::new(),
+            remaining: record1_bytes.len() + 5,
+            fail_flush: false,
+            fail_sync: false,
+        };
+        let mut append_failed = false;
+
+        Log::write_record(&mut writer, &mut append_failed, &record1_bytes)
+            .expect("first record should succeed");
+
+        assert_eq!(
+            append_failed, false,
+            "append_failed should be false after a successful write"
+        );
+
+        let error = Log::write_record(&mut writer, &mut append_failed, &record2_bytes)
+            .expect_err("expected a partial write failure");
+
+        assert!(
+            append_failed,
+            "append_failed should be true after a partial write failure"
+        );
+        assert!(
+            matches!(error, StorageError::Io(_)),
+            "expected an I/O error for the partial write failure"
+        );
+        assert_eq!(
+            writer.written,
+            [record1_bytes.as_slice(), &record2_bytes[..5]].concat()
+        );
+
+        let dir = tempfile::tempdir().expect("temporary directory should be created");
+        let path = dir.path().join("failed-append.log");
+
+        let mut log =
+            Log::open(&path, RecordLimits::default()).expect("opening the log should succeed");
+
+        std::fs::write(&path, &writer.written)
+            .expect("writing the simulated failed-append contents should succeed");
+
+        log.append_failed = append_failed;
+
+        let mut scanner = log.scan().expect("scanning the log should succeed");
+        let result1 = scanner
+            .next()
+            .expect("expected the first record to be present");
+
+        assert!(
+            result1.is_ok(),
+            "expected the first record to be successfully read"
+        );
+        assert_eq!(result1.unwrap(), record1);
+
+        let result2 = scanner
+            .next()
+            .expect("expected the second record to be present");
+        assert!(
+            result2.is_err(),
+            "expected the second record to fail due to incomplete write"
+        );
+
+        assert!(matches!(
+            result2,
+            Err(StorageError::Codec(CodecError::IncompleteHeader))
+        ));
+
+        let result3 = scanner.next();
+        assert!(
+            result3.is_none(),
+            "expected no more records after the incomplete second record"
         );
     }
 }
