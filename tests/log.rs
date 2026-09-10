@@ -3,10 +3,13 @@ mod common;
 use common::sample_record;
 use std::fs::read;
 
-use rivet::{error::StorageError, storage::{
-    log::Log,
-    record::{Record, RecordLimits},
-}};
+use rivet::{
+    error::StorageError,
+    storage::{
+        log::Log,
+        record::{Record, RecordLimits},
+    },
+};
 
 use crate::common::record_with_fields;
 
@@ -211,9 +214,8 @@ fn opening_invalid_path_preserves_io_error_source() {
     let missing_subdir = dir.path().join("missing-subdir");
     let path = missing_subdir.as_path().join("codec-rejection.log");
 
-    let error = Log::open(&path, RecordLimits::default()).expect_err(
-        "opening a log beneath a missing parent directory should fail",
-    );
+    let error = Log::open(&path, RecordLimits::default())
+        .expect_err("opening a log beneath a missing parent directory should fail");
 
     assert!(
         matches!(error, StorageError::Io(_)),
@@ -223,7 +225,16 @@ fn opening_invalid_path_preserves_io_error_source() {
 
 #[test]
 fn scanning_empty_log_yields_no_records() {
-    todo!("Scan a newly created empty log; expect no records and no error");
+    let dir = tempfile::tempdir().expect("temporary directory should be created");
+    let path = dir.path().join("empty.log");
+    let log = Log::open(&path, RecordLimits::default()).expect("opening a missing log path should succeed");
+
+    let mut scanner = log.scan()
+        .expect("scanning an empty log should succeed");
+
+    assert!(scanner.next().is_none(), "scanning an empty log should yield no records");
+    assert!(scanner.next().is_none(), "scanning an empty log a second time should yield no records");
+    assert!(scanner.next().is_none(), "scanning an empty log a third time should yield no records");
 }
 
 #[test]

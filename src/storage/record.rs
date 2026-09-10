@@ -3,7 +3,7 @@ use crc32fast::hash;
 
 const MAGIC: &[u8; 4] = b"RIVT";
 const VERSION: u8 = 1;
-const HEADER_LENGTH: usize = 30;
+pub(super) const HEADER_LENGTH: usize = 30;
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct RecordLimits {
@@ -72,6 +72,63 @@ impl Record {
         }
     }
 
+    pub(super) fn encoded_record_len(
+        header: &[u8],
+        limits: &RecordLimits,
+    ) -> Result<usize, CodecError> {
+        if header.len() < HEADER_LENGTH {
+            return Err(CodecError::IncompleteHeader);
+        }
+
+        if header[0..4] != MAGIC[..] {
+            return Err(CodecError::InvalidMagic);
+        }
+
+        if header[4] != VERSION {
+            return Err(CodecError::UnsupportedVersion);
+        }
+
+        let key_present = header[21];
+        let key_length_bytes: [u8; 4] = header[22..26]
+            .try_into()
+            .expect("header checked; key length slice is exactly four bytes");
+        let payload_length_bytes: [u8; 4] = header[26..30]
+            .try_into()
+            .expect("header checked; payload length slice is exactly four bytes");
+
+        let key_length = u32::from_be_bytes(key_length_bytes);
+        let payload_length = u32::from_be_bytes(payload_length_bytes);
+
+        if key_present != 0 && key_present != 1 {
+            return Err(CodecError::InvalidKeyPresence);
+        }
+
+        if key_present == 0 && key_length > 0 {
+            return Err(CodecError::InvalidKeyLength);
+        }
+
+        if key_length > limits.max_key_bytes {
+            return Err(CodecError::KeyTooLarge);
+        }
+
+        if payload_length > limits.max_payload_bytes {
+            return Err(CodecError::PayloadTooLarge);
+        }
+
+        let key_len = usize::try_from(key_length).map_err(|_| CodecError::LengthOverflow)?;
+
+        let payload_len =
+            usize::try_from(payload_length).map_err(|_| CodecError::LengthOverflow)?;
+
+        let total_len = HEADER_LENGTH
+            .checked_add(key_len)
+            .and_then(|len| len.checked_add(payload_len))
+            .and_then(|len| len.checked_add(4)) // CRC32 checksum
+            .ok_or(CodecError::LengthOverflow)?;
+
+        Ok(total_len)
+    }
+
     // Record format v1 (all integers big-endian):
     // [0..4]   magic: b"RIVT"
     // [4]      version: 1
@@ -118,17 +175,7 @@ impl Record {
     }
 
     pub fn decode(bytes: &[u8], limits: &RecordLimits) -> Result<(Self, usize), CodecError> {
-        if bytes.len() < HEADER_LENGTH {
-            return Err(CodecError::IncompleteHeader);
-        }
-
-        if &bytes[0..4] != MAGIC {
-            return Err(CodecError::InvalidMagic);
-        }
-
-        if bytes[4] != VERSION {
-            return Err(CodecError::UnsupportedVersion);
-        }
+        let record_end = Self::encoded_record_len(bytes, limits)?;
 
         let offset_bytes: [u8; 8] = bytes[5..13]
             .try_into()
@@ -142,53 +189,15 @@ impl Record {
             .try_into()
             .expect("header checked; key length slice is exactly four bytes");
 
-        let payload_length_bytes: [u8; 4] = bytes[26..30]
-            .try_into()
-            .expect("header checked; payload length slice is exactly four bytes");
+        let key_length = u32::from_be_bytes(key_length_bytes);
+
+        let key_len = usize::try_from(key_length).map_err(|_| CodecError::LengthOverflow)?;
 
         let key_present = bytes[21];
         let offset = u64::from_be_bytes(offset_bytes);
         let timestamp = u64::from_be_bytes(timestamp_bytes);
-        let key_length = u32::from_be_bytes(key_length_bytes);
-        let payload_length = u32::from_be_bytes(payload_length_bytes);
-
-        if key_present != 0 && key_present != 1 {
-            return Err(CodecError::InvalidKeyPresence);
-        }
-
-        if key_present == 0 && key_length > 0 {
-            return Err(CodecError::InvalidKeyLength);
-        }
-
-        if key_length > limits.max_key_bytes {
-            return Err(CodecError::KeyTooLarge);
-        }
-
-        if payload_length > limits.max_payload_bytes {
-            return Err(CodecError::PayloadTooLarge);
-        }
-
-        let key_len = match usize::try_from(key_length) {
-            Ok(len) => len,
-            Err(_) => return Err(CodecError::LengthOverflow),
-        };
-
-        let payload_len = match usize::try_from(payload_length) {
-            Ok(len) => len,
-            Err(_) => return Err(CodecError::LengthOverflow),
-        };
 
         let key_end = match HEADER_LENGTH.checked_add(key_len) {
-            Some(end) => end,
-            None => return Err(CodecError::LengthOverflow),
-        };
-
-        let payload_end = match key_end.checked_add(payload_len) {
-            Some(end) => end,
-            None => return Err(CodecError::LengthOverflow),
-        };
-
-        let record_end = match payload_end.checked_add(4) {
             Some(end) => end,
             None => return Err(CodecError::LengthOverflow),
         };
@@ -196,6 +205,8 @@ impl Record {
         if bytes.len() < record_end {
             return Err(CodecError::IncompleteBody);
         }
+
+        let payload_end = record_end - 4;
 
         let checksum_bytes: [u8; 4] = bytes[payload_end..record_end]
             .try_into()
