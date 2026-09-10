@@ -5,6 +5,7 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::Path;
 
+#[derive(Debug)]
 pub struct Log {
     file: File,
     limits: RecordLimits,

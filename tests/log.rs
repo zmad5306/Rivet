@@ -3,10 +3,10 @@ mod common;
 use common::sample_record;
 use std::fs::read;
 
-use rivet::storage::{
+use rivet::{error::StorageError, storage::{
     log::Log,
     record::{Record, RecordLimits},
-};
+}};
 
 use crate::common::record_with_fields;
 
@@ -207,8 +207,17 @@ fn codec_rejection_leaves_file_unchanged() {
 
 #[test]
 fn opening_invalid_path_preserves_io_error_source() {
-    todo!(
-        "Open beneath a missing parent directory; match StorageError::Io and verify Error::source exposes the cause"
+    let dir = tempfile::tempdir().expect("temporary directory should be created");
+    let missing_subdir = dir.path().join("missing-subdir");
+    let path = missing_subdir.as_path().join("codec-rejection.log");
+
+    let error = Log::open(&path, RecordLimits::default()).expect_err(
+        "opening a log beneath a missing parent directory should fail",
+    );
+
+    assert!(
+        matches!(error, StorageError::Io(_)),
+        "opening a log beneath a missing parent directory should yield StorageError::Io"
     );
 }
 
