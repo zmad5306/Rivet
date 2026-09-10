@@ -2,6 +2,7 @@ mod common;
 
 use common::sample_record;
 use rivet::error::CodecError;
+use std::error::Error;
 use std::fs::read;
 use std::fs::write;
 
@@ -222,6 +223,18 @@ fn opening_invalid_path_preserves_io_error_source() {
     assert!(
         matches!(error, StorageError::Io(_)),
         "opening a log beneath a missing parent directory should yield StorageError::Io"
+    );
+    assert!(
+        error.source().is_some(),
+        "the source of the error should be exposed"
+    );
+    assert!(
+        error
+            .source()
+            .unwrap()
+            .downcast_ref::<std::io::Error>()
+            .is_some(),
+        "the source of the error should be an underlying std::io::Error"
     );
 }
 
@@ -604,10 +617,13 @@ fn scanning_corrupt_record_preserves_codec_error() {
         "expected a corrupt record error with an invalid checksum"
     );
 
-    assert!(matches!(
-        error,
-        StorageError::Codec(CodecError::InvalidChecksum)
-    ));
+    assert!(
+        matches!(
+            error.source().unwrap().downcast_ref::<CodecError>(),
+            Some(CodecError::InvalidChecksum)
+        ),
+        "expected the source of the error to be a CodecError::InvalidChecksum"
+    );
 
     assert!(
         scanner.next().is_none(),
