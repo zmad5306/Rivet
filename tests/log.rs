@@ -227,37 +227,173 @@ fn opening_invalid_path_preserves_io_error_source() {
 fn scanning_empty_log_yields_no_records() {
     let dir = tempfile::tempdir().expect("temporary directory should be created");
     let path = dir.path().join("empty.log");
-    let log = Log::open(&path, RecordLimits::default()).expect("opening a missing log path should succeed");
+    let log = Log::open(&path, RecordLimits::default())
+        .expect("opening a missing log path should succeed");
 
-    let mut scanner = log.scan()
-        .expect("scanning an empty log should succeed");
+    let mut scanner = log.scan().expect("scanning an empty log should succeed");
 
-    assert!(scanner.next().is_none(), "scanning an empty log should yield no records");
-    assert!(scanner.next().is_none(), "scanning an empty log a second time should yield no records");
-    assert!(scanner.next().is_none(), "scanning an empty log a third time should yield no records");
+    assert!(
+        scanner.next().is_none(),
+        "scanning an empty log should yield no records"
+    );
+    assert!(
+        scanner.next().is_none(),
+        "scanning an empty log a second time should yield no records"
+    );
+    assert!(
+        scanner.next().is_none(),
+        "scanning an empty log a third time should yield no records"
+    );
 }
 
 #[test]
 fn scanning_one_record_preserves_all_fields() {
-    todo!("Append one record and scan it; compare the full record and verify the scan ends");
+    let record = sample_record(0);
+    let dir = tempfile::tempdir().expect("temporary directory should be created");
+    let path = dir.path().join("empty.log");
+    let mut log = Log::open(&path, RecordLimits::default())
+        .expect("opening a missing log path should succeed");
+
+    log.append(&record)
+        .expect("appending a record should succeed");
+
+    let scanned_record = log
+        .scan()
+        .expect("scanning a log with one record should succeed")
+        .next()
+        .expect("scanning a log with one record should yield a record")
+        .expect("scanning a log with one record should yield a valid record");
+
+    assert_eq!(record, scanned_record);
 }
 
 #[test]
 fn scanning_many_records_preserves_offset_order_and_contents() {
-    todo!(
-        "Append consecutive offsets with varied sizes, absent and empty keys, and binary payloads; compare the scan in order"
+    let records = vec![
+        // Absent key, empty payload.
+        Record::new(0, 1_000, None, vec![]),
+        // Present but empty key, one-byte payload.
+        Record::new(1, 1_001, Some(vec![]), vec![0x00]),
+        // Nonempty key, binary payload including invalid UTF-8.
+        Record::new(
+            2,
+            1_002,
+            Some(b"customer-123".to_vec()),
+            vec![0x00, 0xFF, 0x80, 0x0A, 0x42],
+        ),
+        // Absent key, larger payload containing every possible byte.
+        Record::new(3, 1_003, None, (0u8..=255).collect()),
+        // Binary key, short payload after the larger record.
+        Record::new(4, 1_004, Some(vec![0x00, 0xFE, 0x80]), vec![0xAB, 0xCD]),
+    ];
+    let dir = tempfile::tempdir().expect("temporary directory should be created");
+    let path = dir.path().join("empty.log");
+    let mut log = Log::open(&path, RecordLimits::default())
+        .expect("opening a missing log path should succeed");
+
+    records.iter().for_each(|record| {
+        log.append(record)
+            .expect("appending a record should succeed");
+    });
+
+    let scanner = log
+        .scan()
+        .expect("scanning a log with many records should succeed");
+
+    assert_eq!(
+        records,
+        scanner
+            .collect::<Result<Vec<_>, _>>()
+            .expect("scanning a log with many records should yield valid records"),
+        "scanning a log with many records should yield the same records in the same order"
     );
 }
 
 #[test]
 fn scanning_reopened_log_preserves_all_records() {
-    todo!("Append several records, drop and reopen the log, then compare every scanned record");
+    let record1 = sample_record(0);
+    let record2 = sample_record(1);
+    let record3 = sample_record(2);
+    let dir = tempfile::tempdir().expect("temporary directory should be created");
+    let path = dir.path().join("empty.log");
+    let mut log = Log::open(&path, RecordLimits::default())
+        .expect("opening a missing log path should succeed");
+
+    log.append(&record1)
+        .expect("appending first record should succeed");
+    log.append(&record2)
+        .expect("appending second record should succeed");
+    log.append(&record3)
+        .expect("appending third record should succeed");
+
+    drop(log);
+
+    log = Log::open(&path, RecordLimits::default())
+        .expect("opening an existing log path should succeed");
+
+    let scanner = log.scan().expect("scanning a reopened log should succeed");
+
+    assert_eq!(
+        vec![record1, record2, record3],
+        scanner
+            .collect::<Result<Vec<_>, _>>()
+            .expect("scanning a reopened log should yield valid records"),
+        "scanning a reopened log should yield the same records in the same order"
+    );
 }
 
 #[test]
 fn append_after_scanning_writes_at_end() {
-    todo!(
-        "Append and scan, then append again; verify the original bytes remain and both records scan correctly"
+    let record1 = sample_record(0);
+    let record2 = sample_record(1);
+    let dir = tempfile::tempdir().expect("temporary directory should be created");
+    let path = dir.path().join("empty.log");
+    let mut log = Log::open(&path, RecordLimits::default())
+        .expect("opening a missing log path should succeed");
+
+    log.append(&record1)
+        .expect("appending first record should succeed");
+
+    let mut scanner = log
+        .scan()
+        .expect("scanning a log with one record should succeed");
+
+    let scanned_record1 = scanner
+        .next()
+        .expect("scanning a log with one record should yield a record")
+        .expect("scanning a log with one record should yield a valid record");
+
+    assert_eq!(record1, scanned_record1);
+
+    drop(scanner);
+
+    let file_bytes_after_record_1 =
+        read(&path).expect("reading the log file after appending the first record should succeed");
+
+    log.append(&record2)
+        .expect("appending second record should succeed");
+
+    let scanner = log
+        .scan()
+        .expect("scanning a log with two records should succeed");
+
+    let file_bytes_after_record_2 =
+        read(&path).expect("reading the log file after appending the second record should succeed");
+
+    assert_eq!(
+        vec![record1, record2],
+        scanner
+            .collect::<Result<Vec<_>, _>>()
+            .expect("scanning a log with two records should yield valid records"),
+        "scanning a log with two records should yield the same records in the same order"
+    );
+    assert!(
+        file_bytes_after_record_2.starts_with(&file_bytes_after_record_1),
+        "the log file after appending the second record should start with the contents after the first record"
+    );
+    assert!(
+        file_bytes_after_record_2.len() > file_bytes_after_record_1.len(),
+        "the log file after appending the second record should be larger than after the first record"
     );
 }
 
