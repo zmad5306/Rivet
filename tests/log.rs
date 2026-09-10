@@ -415,20 +415,18 @@ fn append_after_scanning_writes_at_end() {
 fn scanning_partial_header_returns_incomplete_header() {
     let record1 = sample_record(0);
     let record2 = sample_record(1);
-    let mut record_bytes = record1
+    let record1_bytes = record1
         .encode(&RecordLimits::default())
         .expect("encoding the first record should succeed");
-
-    record_bytes.extend_from_slice(
-        &record2
-            .encode(&RecordLimits::default())
-            .expect("encoding the second record should succeed")[..10],
-    );
-
+    let record2_bytes = record2
+        .encode(&RecordLimits::default())
+        .expect("encoding the second record should succeed");
+    let partial_record2_bytes = record2_bytes[..10].to_vec();
     let dir = tempfile::tempdir().expect("temporary directory should be created");
     let path = dir.path().join("partial-header.log");
+    let bytes = [record1_bytes.as_slice(), partial_record2_bytes.as_slice()].concat();
 
-    write(&path, &record_bytes)
+    write(&path, &bytes)
         .expect("writing a complete record followed by a partial header should succeed");
 
     let log = Log::open(&path, RecordLimits::default())
@@ -473,20 +471,18 @@ fn scanning_partial_header_returns_incomplete_header() {
 fn scanning_partial_body_returns_incomplete_body() {
     let record1 = sample_record(0);
     let record2 = sample_record(1);
-    let mut record_bytes = record1
+    let record1_bytes = record1
         .encode(&RecordLimits::default())
         .expect("encoding the first record should succeed");
-    
-    record_bytes.extend_from_slice(
-        &record2
-            .encode(&RecordLimits::default())
-            .expect("encoding the second record should succeed")[..34],
-    );
-
+    let record2_bytes = record2
+        .encode(&RecordLimits::default())
+        .expect("encoding the second record should succeed");
+    let partial_record2_bytes = record2_bytes[..34].to_vec();
     let dir = tempfile::tempdir().expect("temporary directory should be created");
     let path = dir.path().join("partial-body.log");
+    let bytes = [record1_bytes.as_slice(), partial_record2_bytes.as_slice()].concat();
 
-    write(&path, &record_bytes)
+    write(&path, &bytes)
         .expect("writing a complete record followed by a partial body should succeed");
 
     let log = Log::open(&path, RecordLimits::default())
@@ -531,20 +527,18 @@ fn scanning_partial_body_returns_incomplete_body() {
 fn scanning_partial_checksum_returns_incomplete_body() {
     let record1 = sample_record(0);
     let record2 = sample_record(1);
-    let mut record_bytes = record1
+    let record1_bytes = record1
         .encode(&RecordLimits::default())
         .expect("encoding the first record should succeed");
-
-    record_bytes.extend_from_slice(
-        &record2
-            .encode(&RecordLimits::default())
-            .expect("encoding the second record should succeed")[..38],
-    );
-
+    let record2_bytes = record2
+        .encode(&RecordLimits::default())
+        .expect("encoding the second record should succeed");
+    let partial_record2_bytes = record2_bytes[..38].to_vec();
     let dir = tempfile::tempdir().expect("temporary directory should be created");
     let path = dir.path().join("partial-checksum.log");
+    let bytes = [record1_bytes.as_slice(), partial_record2_bytes.as_slice()].concat();
 
-    write(&path, &record_bytes)
+    write(&path, &bytes)
         .expect("writing a complete record followed by a partial checksum should succeed");
 
     let log = Log::open(&path, RecordLimits::default())
@@ -588,16 +582,16 @@ fn scanning_partial_checksum_returns_incomplete_body() {
 #[test]
 fn scanning_corrupt_record_preserves_codec_error() {
     let record = sample_record(0);
-    let mut record_bytes = record
+    let mut bytes = record
         .encode(&RecordLimits::default())
         .expect("encoding the first record should succeed");
 
-    record_bytes[33] ^= 0x01;
+    bytes[33] ^= 0x01;
 
     let dir = tempfile::tempdir().expect("temporary directory should be created");
     let path = dir.path().join("corrupt.log");
 
-    write(&path, &record_bytes).expect("writing the corrupt record should succeed");
+    write(&path, &bytes).expect("writing the corrupt record should succeed");
 
     let log = Log::open(&path, RecordLimits::default())
         .expect("opening the log with a corrupt record should succeed");
