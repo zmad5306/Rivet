@@ -7,6 +7,16 @@ use std::fs::OpenOptions;
 use std::io::{BufReader, Read, Write};
 use std::path::Path;
 
+trait AppendIo: Write {
+    fn sync_data(&self) -> std::io::Result<()>;
+}
+
+impl AppendIo for File {
+    fn sync_data(&self) -> std::io::Result<()> {
+        File::sync_data(self)
+    }
+}
+
 struct Reader<'a> {
     file: &'a File,
     position: u64,
@@ -142,6 +152,36 @@ pub struct Log {
 }
 
 impl Log {
+    fn write_record(writer: &mut impl AppendIo, append_failed: &mut bool, bytes: &[u8]) -> Result<(), StorageError> {
+        if *append_failed {
+            return Err(StorageError::AppendDisabled);
+        }
+
+        match writer.write_all(bytes) {
+            Ok(_) => {}
+            Err(e) => {
+                *append_failed = true;
+                return Err(StorageError::Io(e));
+            }
+        }
+        match writer.flush() {
+            Ok(_) => {}
+            Err(e) => {
+                *append_failed = true;
+                return Err(StorageError::Io(e));
+            }
+        }
+        match writer.sync_data() {
+            Ok(_) => {}
+            Err(e) => {
+                *append_failed = true;
+                return Err(StorageError::Io(e));
+            }
+        }
+
+        Ok(())
+    }
+
     pub fn open(path: &Path, limits: RecordLimits) -> Result<Self, StorageError> {
         let file = OpenOptions::new()
             .create(true)
@@ -159,30 +199,9 @@ impl Log {
         if self.append_failed {
             return Err(StorageError::AppendDisabled);
         }
-
+        
         let bytes = record.encode(&self.limits)?;
-        match self.file.write_all(&bytes) {
-            Ok(_) => {}
-            Err(e) => {
-                self.append_failed = true;
-                return Err(StorageError::Io(e));
-            }
-        }
-        match self.file.flush() {
-            Ok(_) => {}
-            Err(e) => {
-                self.append_failed = true;
-                return Err(StorageError::Io(e));
-            }
-        }
-        match self.file.sync_data() {
-            Ok(_) => {}
-            Err(e) => {
-                self.append_failed = true;
-                return Err(StorageError::Io(e));
-            }
-        }
-        Ok(())
+        Self::write_record(&mut self.file, &mut self.append_failed, &bytes)
     }
 
     pub fn scan(&self) -> Result<LogScanner<'_>, StorageError> {
