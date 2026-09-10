@@ -629,27 +629,6 @@ fn scanning_corrupt_record_preserves_codec_error() {
 }
 
 #[test]
-fn partial_write_failure_rejects_later_appends() {
-    todo!(
-        "Inject a write failure after part of a record has been written; verify the append returns the underlying I/O error and subsequent appends are rejected without writing more bytes"
-    );
-}
-
-#[test]
-fn flush_failure_rejects_later_appends() {
-    todo!(
-        "Inject a flush failure after writing a record; verify the append returns the underlying I/O error and subsequent appends are rejected without writing more bytes"
-    );
-}
-
-#[test]
-fn sync_failure_rejects_later_appends() {
-    todo!(
-        "Inject a sync_data failure; verify the append returns the underlying I/O error and subsequent appends are rejected without writing more bytes"
-    );
-}
-
-#[test]
 fn codec_rejection_allows_later_valid_appends() {
     todo!(
         "Append a valid record, reject an oversized record during encoding, then append another valid record; verify scanning yields exactly the two valid records in order"
@@ -688,12 +667,5 @@ fn simultaneous_scanners_have_independent_positions() {
 fn append_after_partial_scan_preserves_unread_records() {
     todo!(
         "Append enough records to exceed the reader buffer capacity several times, read only the first record and drop the scanner, then append another record; verify the original file prefix is unchanged and a fresh scan yields all original records followed by the new record"
-    );
-}
-
-#[test]
-fn scanning_after_append_failure_preserves_valid_prefix() {
-    todo!(
-        "Append a valid record, inject a partial write failure during the next append, then scan the failed log; verify the valid record remains readable, the partial record produces the appropriate incomplete-record error, and the scanner then yields None"
     );
 }

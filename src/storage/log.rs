@@ -152,7 +152,11 @@ pub struct Log {
 }
 
 impl Log {
-    fn write_record(writer: &mut impl AppendIo, append_failed: &mut bool, bytes: &[u8]) -> Result<(), StorageError> {
+    fn write_record(
+        writer: &mut impl AppendIo,
+        append_failed: &mut bool,
+        bytes: &[u8],
+    ) -> Result<(), StorageError> {
         if *append_failed {
             return Err(StorageError::AppendDisabled);
         }
@@ -199,7 +203,7 @@ impl Log {
         if self.append_failed {
             return Err(StorageError::AppendDisabled);
         }
-        
+
         let bytes = record.encode(&self.limits)?;
         Self::write_record(&mut self.file, &mut self.append_failed, &bytes)
     }
@@ -211,5 +215,175 @@ impl Log {
             limits: &self.limits,
             finished: false,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct FailAfterBytes {
+        written: Vec<u8>,
+        remaining: usize,
+        fail_flush: bool,
+        fail_sync: bool,
+    }
+
+    impl Write for FailAfterBytes {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            if buf.is_empty() {
+                return Ok(0);
+            }
+
+            if self.remaining == 0 {
+                return Err(std::io::Error::other("injected write failure"));
+            }
+
+            let to_write = std::cmp::min(buf.len(), self.remaining);
+            self.written.extend_from_slice(&buf[..to_write]);
+            self.remaining -= to_write;
+            Ok(to_write)
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            if self.fail_flush {
+                return Err(std::io::Error::other("injected flush failure"));
+            }
+            Ok(())
+        }
+    }
+
+    impl AppendIo for FailAfterBytes {
+        fn sync_data(&self) -> std::io::Result<()> {
+            if self.fail_sync {
+                return Err(std::io::Error::other("injected sync failure"));
+            }
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn partial_write_failure_rejects_later_appends() {
+        let record = Record::new(0, 1_700_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3]);
+        let record_bytes = record
+            .encode(&RecordLimits::default())
+            .expect("encoding the record should succeed");
+        let mut writer = FailAfterBytes {
+            written: Vec::new(),
+            remaining: 5,
+            fail_flush: false,
+            fail_sync: false,
+        };
+        let mut append_failed = false;
+
+        let error = Log::write_record(&mut writer, &mut append_failed, &record_bytes)
+            .expect_err("expected a write failure");
+
+        match error {
+            StorageError::Io(io_error) => {
+                assert_eq!(io_error.kind(), std::io::ErrorKind::Other);
+                assert_eq!(io_error.to_string(), "injected write failure");
+            }
+            other => panic!("expected an I/O error, got {other:?}"),
+        }
+
+        assert!(
+            append_failed,
+            "append_failed should be set to true after a write failure"
+        );
+        assert_eq!(writer.written, &record_bytes[..5]);
+
+        writer.remaining = record_bytes.len() + 1;
+
+        let error = Log::write_record(&mut writer, &mut append_failed, &record_bytes)
+            .expect_err("expected appending to be disabled");
+
+        assert!(matches!(error, StorageError::AppendDisabled));
+        assert_eq!(writer.written, &record_bytes[..5]);
+    }
+
+    #[test]
+    fn flush_failure_rejects_later_appends() {
+        let record = Record::new(0, 1_700_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3]);
+        let record_bytes = record
+            .encode(&RecordLimits::default())
+            .expect("encoding the record should succeed");
+        let mut writer = FailAfterBytes {
+            written: Vec::new(),
+            remaining: record_bytes.len() + 1,
+            fail_flush: true,
+            fail_sync: false,
+        };
+        let mut append_failed = false;
+
+        let error = Log::write_record(&mut writer, &mut append_failed, &record_bytes)
+            .expect_err("expected a write failure");
+
+        match error {
+            StorageError::Io(io_error) => {
+                assert_eq!(io_error.kind(), std::io::ErrorKind::Other);
+                assert_eq!(io_error.to_string(), "injected flush failure");
+            }
+            other => panic!("expected an I/O error, got {other:?}"),
+        }
+
+        assert!(
+            append_failed,
+            "append_failed should be set to true after a flush failure"
+        );
+        assert_eq!(writer.written, record_bytes);
+        writer.fail_flush = false;
+
+        let error = Log::write_record(&mut writer, &mut append_failed, &record_bytes)
+            .expect_err("expected appending to be disabled after a flush failure");
+
+        assert!(matches!(error, StorageError::AppendDisabled));
+    }
+
+    #[test]
+    fn sync_failure_rejects_later_appends() {
+        let record = Record::new(0, 1_700_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3]);
+        let record_bytes = record
+            .encode(&RecordLimits::default())
+            .expect("encoding the record should succeed");
+        let mut writer = FailAfterBytes {
+            written: Vec::new(),
+            remaining: record_bytes.len() + 1,
+            fail_flush: false,
+            fail_sync: true,
+        };
+        let mut append_failed = false;
+
+        let error = Log::write_record(&mut writer, &mut append_failed, &record_bytes)
+            .expect_err("expected a write failure");
+
+        match error {
+            StorageError::Io(io_error) => {
+                assert_eq!(io_error.kind(), std::io::ErrorKind::Other);
+                assert_eq!(io_error.to_string(), "injected sync failure");
+            }
+            other => panic!("expected an I/O error, got {other:?}"),
+        }
+
+        assert!(
+            append_failed,
+            "append_failed should be set to true after a write failure"
+        );
+        assert_eq!(writer.written, record_bytes);
+
+        writer.remaining = record_bytes.len() + 1;
+
+        let error = Log::write_record(&mut writer, &mut append_failed, &record_bytes)
+            .expect_err("expected appending to be disabled");
+
+        assert!(matches!(error, StorageError::AppendDisabled));
+        assert_eq!(writer.written, record_bytes);
+    }
+
+    #[test]
+    fn scanning_after_append_failure_preserves_valid_prefix() {
+        todo!(
+            "Append a valid record, inject a partial write failure during the next append, then scan the failed log; verify the valid record remains readable, the partial record produces the appropriate incomplete-record error, and the scanner then yields None"
+        );
     }
 }
