@@ -13,7 +13,7 @@ use crate::common::record_with_fields;
 #[test]
 fn opening_new_log_creates_empty_file() {
     let dir = tempfile::tempdir().expect("temporary directory should be created");
-    let path = dir.path().join("missing.log");
+    let path = dir.path().join("new-log.log");
 
     Log::open(&path, RecordLimits::default()).expect("opening a missing log path should succeed");
 
@@ -35,7 +35,7 @@ fn reopening_log_preserves_existing_bytes() {
     let record = sample_record(0);
 
     let dir = tempfile::tempdir().expect("temporary directory should be created");
-    let path = dir.path().join("missing.log");
+    let path = dir.path().join("reopen-preserves-bytes.log");
 
     let mut log = Log::open(&path, RecordLimits::default())
         .expect("opening a missing log path should succeed");
@@ -66,7 +66,7 @@ fn append_one_record_writes_expected_encoded_bytes() {
         .expect("record should encode");
 
     let dir = tempfile::tempdir().expect("temporary directory should be created");
-    let path = dir.path().join("missing.log");
+    let path = dir.path().join("single-record.log");
 
     let mut log = Log::open(&path, RecordLimits::default())
         .expect("opening a missing log path should succeed");
@@ -93,7 +93,7 @@ fn later_appends_grow_file_and_preserve_original_prefix() {
     );
 
     let dir = tempfile::tempdir().expect("temporary directory should be created");
-    let path = dir.path().join("missing.log");
+    let path = dir.path().join("append-preserves-prefix.log");
 
     let mut log = Log::open(&path, RecordLimits::default())
         .expect("opening a missing log path should succeed");
@@ -139,7 +139,7 @@ fn append_after_reopening_preserves_previous_records() {
     );
 
     let dir = tempfile::tempdir().expect("temporary directory should be created");
-    let path = dir.path().join("missing.log");
+    let path = dir.path().join("append-after-reopen.log");
 
     let mut log = Log::open(&path, RecordLimits::default())
         .expect("opening a missing log path should succeed");
@@ -185,7 +185,7 @@ fn codec_rejection_leaves_file_unchanged() {
     let limits = RecordLimits::new(3, 3);
 
     let dir = tempfile::tempdir().expect("temporary directory should be created");
-    let path = dir.path().join("missing.log");
+    let path = dir.path().join("codec-rejection.log");
 
     let mut log = Log::open(&path, limits).expect("opening a missing log path should succeed");
 
