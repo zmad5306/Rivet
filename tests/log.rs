@@ -630,3 +630,73 @@ fn scanning_corrupt_record_preserves_codec_error() {
         "expected no more records after the corrupt record"
     );
 }
+
+#[test]
+fn partial_write_failure_rejects_later_appends() {
+    todo!(
+        "Inject a write failure after part of a record has been written; verify the append returns the underlying I/O error and subsequent appends are rejected without writing more bytes"
+    );
+}
+
+#[test]
+fn flush_failure_rejects_later_appends() {
+    todo!(
+        "Inject a flush failure after writing a record; verify the append returns the underlying I/O error and subsequent appends are rejected without writing more bytes"
+    );
+}
+
+#[test]
+fn sync_failure_rejects_later_appends() {
+    todo!(
+        "Inject a sync_data failure; verify the append returns the underlying I/O error and subsequent appends are rejected without writing more bytes"
+    );
+}
+
+#[test]
+fn codec_rejection_allows_later_valid_appends() {
+    todo!(
+        "Append a valid record, reject an oversized record during encoding, then append another valid record; verify scanning yields exactly the two valid records in order"
+    );
+}
+
+#[test]
+fn scanning_relative_path_survives_working_directory_change() {
+    todo!(
+        "Use an isolated child process so changing the working directory cannot affect parallel tests; open a relative log path, append a record, change directories, then verify scanning still reads the opened log"
+    );
+}
+
+#[test]
+fn scanning_renamed_log_reads_original_file() {
+    todo!(
+        "Open a log and append a record, rename the file while the log remains open, then verify a new scanner still reads the original record"
+    );
+}
+
+#[test]
+fn scanning_replaced_path_reads_original_file() {
+    todo!(
+        "Open a log and append a record, rename its file and create a different valid log at the original path, then append another record through the original Log; verify a new scanner reads both original-log records and no replacement-log records"
+    );
+}
+
+#[test]
+fn simultaneous_scanners_have_independent_positions() {
+    todo!(
+        "Append enough varied-size records to exceed the reader buffer capacity several times, create two scanners, and interleave their next calls at different rates across buffer refills; verify each scanner independently yields every record in order and reaches EOF"
+    );
+}
+
+#[test]
+fn append_after_partial_scan_preserves_unread_records() {
+    todo!(
+        "Append enough records to exceed the reader buffer capacity several times, read only the first record and drop the scanner, then append another record; verify the original file prefix is unchanged and a fresh scan yields all original records followed by the new record"
+    );
+}
+
+#[test]
+fn scanning_after_append_failure_preserves_valid_prefix() {
+    todo!(
+        "Append a valid record, inject a partial write failure during the next append, then scan the failed log; verify the valid record remains readable, the partial record produces the appropriate incomplete-record error, and the scanner then yields None"
+    );
+}

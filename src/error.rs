@@ -41,6 +41,7 @@ impl std::error::Error for CodecError {}
 pub enum StorageError {
     Codec(CodecError),
     Io(std::io::Error),
+    AppendDisabled,
 }
 
 impl From<CodecError> for StorageError {
@@ -60,6 +61,7 @@ impl std::fmt::Display for StorageError {
         match self {
             StorageError::Codec(err) => write!(f, "codec error: {}", err),
             StorageError::Io(err) => write!(f, "io error: {}", err),
+            StorageError::AppendDisabled => write!(f, "append disabled"),
         }
     }
 }
@@ -69,6 +71,7 @@ impl std::error::Error for StorageError {
         match self {
             StorageError::Codec(err) => Some(err),
             StorageError::Io(err) => Some(err),
+            StorageError::AppendDisabled => None,
         }
     }
 }

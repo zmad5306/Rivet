@@ -7,8 +7,47 @@ use std::fs::OpenOptions;
 use std::io::{BufReader, Read, Write};
 use std::path::Path;
 
+struct Reader<'a> {
+    file: &'a File,
+    position: u64,
+}
+
+impl<'a> Reader<'a> {
+    fn new(file: &'a File) -> Self {
+        Reader { file, position: 0 }
+    }
+}
+
+impl<'a> std::io::Read for Reader<'a> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        #[cfg(unix)]
+        use std::os::unix::fs::FileExt;
+
+        #[cfg(unix)]
+        match self.file.read_at(buf, self.position) {
+            Ok(bytes_read) => {
+                self.position += bytes_read as u64;
+                Ok(bytes_read)
+            }
+            Err(e) => Err(e),
+        }
+
+        #[cfg(windows)]
+        use std::os::windows::fs::FileExt;
+
+        #[cfg(windows)]
+        match self.file.seek_read(buf, self.position) {
+            Ok(bytes_read) => {
+                self.position += bytes_read as u64;
+                Ok(bytes_read)
+            }
+            Err(e) => Err(e),
+        }
+    }
+}
+
 pub struct LogScanner<'a> {
-    reader: BufReader<File>,
+    reader: BufReader<Reader<'a>>,
     limits: &'a RecordLimits,
     finished: bool,
 }
@@ -99,32 +138,57 @@ impl Iterator for LogScanner<'_> {
 pub struct Log {
     file: File,
     limits: RecordLimits,
-    path: std::path::PathBuf,
+    append_failed: bool,
 }
 
 impl Log {
     pub fn open(path: &Path, limits: RecordLimits) -> Result<Self, StorageError> {
-        let file = OpenOptions::new().create(true).append(true).open(path)?;
+        let file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .read(true)
+            .open(path)?;
         Ok(Log {
             file,
             limits,
-            path: path.to_path_buf(),
+            append_failed: false,
         })
     }
 
     pub fn append(&mut self, record: &Record) -> Result<(), StorageError> {
+        if self.append_failed {
+            return Err(StorageError::AppendDisabled);
+        }
+
         let bytes = record.encode(&self.limits)?;
-        self.file.write_all(&bytes)?;
-        self.file.flush()?;
-        self.file.sync_data()?;
+        match self.file.write_all(&bytes) {
+            Ok(_) => {}
+            Err(e) => {
+                self.append_failed = true;
+                return Err(StorageError::Io(e));
+            }
+        }
+        match self.file.flush() {
+            Ok(_) => {}
+            Err(e) => {
+                self.append_failed = true;
+                return Err(StorageError::Io(e));
+            }
+        }
+        match self.file.sync_data() {
+            Ok(_) => {}
+            Err(e) => {
+                self.append_failed = true;
+                return Err(StorageError::Io(e));
+            }
+        }
         Ok(())
     }
 
     pub fn scan(&self) -> Result<LogScanner<'_>, StorageError> {
-        let file = File::open(&self.path)?;
-        let reader = BufReader::new(file);
+        let reader = Reader::new(&self.file);
         Ok(LogScanner {
-            reader,
+            reader: BufReader::new(reader),
             limits: &self.limits,
             finished: false,
         })
