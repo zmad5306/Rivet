@@ -1,7 +1,9 @@
 mod common;
 
 use common::sample_record;
+use rivet::error::CodecError;
 use std::fs::read;
+use std::fs::write;
 
 use rivet::{
     error::StorageError,
@@ -46,7 +48,7 @@ fn reopening_log_preserves_existing_bytes() {
     log.append(&record)
         .expect("appending a record should succeed");
 
-    let original_file_bytes = read(&path).expect("test log should be readable");
+    let original_file_bytes = read(&path).expect("reading the log file should succeed");
 
     drop(log);
 
@@ -66,7 +68,7 @@ fn append_one_record_writes_expected_encoded_bytes() {
     let record = sample_record(0);
     let expected_bytes = record
         .encode(&RecordLimits::default())
-        .expect("record should encode");
+        .expect("encoding the record should succeed");
 
     let dir = tempfile::tempdir().expect("temporary directory should be created");
     let path = dir.path().join("single-record.log");
@@ -77,7 +79,7 @@ fn append_one_record_writes_expected_encoded_bytes() {
     log.append(&record)
         .expect("appending a record should succeed");
 
-    let file_bytes = read(&path).expect("test log should be readable");
+    let file_bytes = read(&path).expect("reading the log file should succeed");
 
     assert_eq!(
         expected_bytes, file_bytes,
@@ -102,32 +104,32 @@ fn later_appends_grow_file_and_preserve_original_prefix() {
         .expect("opening a missing log path should succeed");
 
     log.append(&record1)
-        .expect("appending a record should succeed");
+        .expect("appending the first record should succeed");
 
-    let file_bytes1 = read(&path).expect("test log should be readable");
+    let file_bytes1 = read(&path).expect("reading the log file should succeed");
 
     log.append(&record2)
-        .expect("appending a record should succeed");
+        .expect("appending the second record should succeed");
 
-    let file_bytes2 = read(&path).expect("test log should be readable");
+    let file_bytes2 = read(&path).expect("reading the log file should succeed");
 
     assert!(
         file_bytes2.len() > file_bytes1.len(),
-        "appending a record should grow the file"
+        "appending the second record should grow the file"
     );
 
     assert!(
         file_bytes2.starts_with(&file_bytes1),
-        "appending a record should preserve the original file prefix"
+        "appending the second record should preserve the original file prefix"
     );
 
     assert!(
         file_bytes2.ends_with(
             &record2
                 .encode(&RecordLimits::default())
-                .expect("record should encode")
+                .expect("encoding the record should succeed")
         ),
-        "appending a record should write the expected encoded bytes at the end"
+        "appending the second record should write the expected encoded bytes at the end"
     );
 }
 
@@ -148,36 +150,36 @@ fn append_after_reopening_preserves_previous_records() {
         .expect("opening a missing log path should succeed");
 
     log.append(&record1)
-        .expect("appending a record should succeed");
+        .expect("appending the first record should succeed");
 
-    let file_bytes1 = read(&path).expect("test log should be readable");
+    let file_bytes1 = read(&path).expect("reading the log file should succeed");
 
     drop(log);
 
     log = Log::open(&path, RecordLimits::default()).expect("reopening the log should succeed");
 
     log.append(&record2)
-        .expect("appending a record should succeed");
+        .expect("appending the second record should succeed");
 
-    let file_bytes2 = read(&path).expect("test log should be readable");
+    let file_bytes2 = read(&path).expect("reading the log file should succeed");
 
     assert!(
         file_bytes2.len() > file_bytes1.len(),
-        "appending a record should grow the file"
+        "appending the second record should grow the file"
     );
 
     assert!(
         file_bytes2.starts_with(&file_bytes1),
-        "appending a record should preserve the original file prefix"
+        "appending the second record should preserve the original file prefix"
     );
 
     assert!(
         file_bytes2.ends_with(
             &record2
                 .encode(&RecordLimits::default())
-                .expect("record should encode")
+                .expect("encoding the record should succeed")
         ),
-        "appending a record should write the expected encoded bytes at the end"
+        "appending the second record should write the expected encoded bytes at the end"
     );
 }
 
@@ -195,12 +197,12 @@ fn codec_rejection_leaves_file_unchanged() {
     log.append(&record1)
         .expect("appending a record should succeed");
 
-    let file_bytes1 = read(&path).expect("test log should be readable");
+    let file_bytes1 = read(&path).expect("reading the log file should succeed");
 
     log.append(&record2)
         .expect_err("appending an oversized record should fail");
 
-    let file_bytes2 = read(&path).expect("test log should be readable");
+    let file_bytes2 = read(&path).expect("reading the log file should succeed");
 
     assert_eq!(
         file_bytes1, file_bytes2,
@@ -212,7 +214,7 @@ fn codec_rejection_leaves_file_unchanged() {
 fn opening_invalid_path_preserves_io_error_source() {
     let dir = tempfile::tempdir().expect("temporary directory should be created");
     let missing_subdir = dir.path().join("missing-subdir");
-    let path = missing_subdir.as_path().join("codec-rejection.log");
+    let path = missing_subdir.as_path().join("invalid-path.log");
 
     let error = Log::open(&path, RecordLimits::default())
         .expect_err("opening a log beneath a missing parent directory should fail");
@@ -238,11 +240,11 @@ fn scanning_empty_log_yields_no_records() {
     );
     assert!(
         scanner.next().is_none(),
-        "scanning an empty log a second time should yield no records"
+        "the exhausted scanner should still yield None on the second call"
     );
     assert!(
         scanner.next().is_none(),
-        "scanning an empty log a third time should yield no records"
+        "the exhausted scanner should still yield None on the third call"
     );
 }
 
@@ -250,7 +252,7 @@ fn scanning_empty_log_yields_no_records() {
 fn scanning_one_record_preserves_all_fields() {
     let record = sample_record(0);
     let dir = tempfile::tempdir().expect("temporary directory should be created");
-    let path = dir.path().join("empty.log");
+    let path = dir.path().join("scan-single-record.log");
     let mut log = Log::open(&path, RecordLimits::default())
         .expect("opening a missing log path should succeed");
 
@@ -287,7 +289,7 @@ fn scanning_many_records_preserves_offset_order_and_contents() {
         Record::new(4, 1_004, Some(vec![0x00, 0xFE, 0x80]), vec![0xAB, 0xCD]),
     ];
     let dir = tempfile::tempdir().expect("temporary directory should be created");
-    let path = dir.path().join("empty.log");
+    let path = dir.path().join("scan-many-records.log");
     let mut log = Log::open(&path, RecordLimits::default())
         .expect("opening a missing log path should succeed");
 
@@ -315,21 +317,20 @@ fn scanning_reopened_log_preserves_all_records() {
     let record2 = sample_record(1);
     let record3 = sample_record(2);
     let dir = tempfile::tempdir().expect("temporary directory should be created");
-    let path = dir.path().join("empty.log");
+    let path = dir.path().join("scan-reopened.log");
     let mut log = Log::open(&path, RecordLimits::default())
         .expect("opening a missing log path should succeed");
 
     log.append(&record1)
-        .expect("appending first record should succeed");
+        .expect("appending the first record should succeed");
     log.append(&record2)
-        .expect("appending second record should succeed");
+        .expect("appending the second record should succeed");
     log.append(&record3)
-        .expect("appending third record should succeed");
+        .expect("appending the third record should succeed");
 
     drop(log);
 
-    log = Log::open(&path, RecordLimits::default())
-        .expect("opening an existing log path should succeed");
+    log = Log::open(&path, RecordLimits::default()).expect("reopening the log should succeed");
 
     let scanner = log.scan().expect("scanning a reopened log should succeed");
 
@@ -347,12 +348,12 @@ fn append_after_scanning_writes_at_end() {
     let record1 = sample_record(0);
     let record2 = sample_record(1);
     let dir = tempfile::tempdir().expect("temporary directory should be created");
-    let path = dir.path().join("empty.log");
+    let path = dir.path().join("append-after-scan.log");
     let mut log = Log::open(&path, RecordLimits::default())
         .expect("opening a missing log path should succeed");
 
     log.append(&record1)
-        .expect("appending first record should succeed");
+        .expect("appending the first record should succeed");
 
     let mut scanner = log
         .scan()
@@ -371,7 +372,7 @@ fn append_after_scanning_writes_at_end() {
         read(&path).expect("reading the log file after appending the first record should succeed");
 
     log.append(&record2)
-        .expect("appending second record should succeed");
+        .expect("appending the second record should succeed");
 
     let scanner = log
         .scan()
@@ -389,18 +390,67 @@ fn append_after_scanning_writes_at_end() {
     );
     assert!(
         file_bytes_after_record_2.starts_with(&file_bytes_after_record_1),
-        "the log file after appending the second record should start with the contents after the first record"
+        "appending after scanning should preserve the original file prefix"
     );
     assert!(
         file_bytes_after_record_2.len() > file_bytes_after_record_1.len(),
-        "the log file after appending the second record should be larger than after the first record"
+        "appending after scanning should grow the file"
     );
 }
 
 #[test]
 fn scanning_partial_header_returns_incomplete_header() {
-    todo!(
-        "Write a valid record followed by a partial header; verify the scan reports the wrapped IncompleteHeader error"
+    let record1 = sample_record(0);
+    let record2 = sample_record(1);
+    let mut record_bytes = record1
+        .encode(&RecordLimits::default())
+        .expect("encoding the first record should succeed");
+    record_bytes.extend_from_slice(
+        &record2
+            .encode(&RecordLimits::default())
+            .expect("encoding the second record should succeed")[..10],
+    );
+
+    let dir = tempfile::tempdir().expect("temporary directory should be created");
+    let path = dir.path().join("partial-header.log");
+    write(&path, &record_bytes)
+        .expect("writing a complete record followed by a partial header should succeed");
+
+    let log = Log::open(&path, RecordLimits::default())
+        .expect("opening the log with a partial header should succeed");
+
+    let mut scanner = log
+        .scan()
+        .expect("creating a scanner for the log with a partial header should succeed");
+
+    let record1_from_log = match scanner.next() {
+        Some(Ok(record)) => record,
+        Some(Err(error)) => panic!("expected the first record, got error: {:?}", error),
+        None => panic!("expected the first record, got None"),
+    };
+
+    assert_eq!(
+        record1_from_log, record1,
+        "the first record read from the log should match the first record written"
+    );
+
+    let error = match scanner.next() {
+        Some(Err(error)) => error,
+        Some(Ok(record)) => panic!(
+            "expected an incomplete header error, got a valid record: {:?}",
+            record
+        ),
+        None => panic!("expected an incomplete header error, got None"),
+    };
+
+    assert!(matches!(
+        error,
+        StorageError::Codec(CodecError::IncompleteHeader)
+    ));
+
+    assert!(
+        scanner.next().is_none(),
+        "expected no more records after the incomplete header"
     );
 }
 
