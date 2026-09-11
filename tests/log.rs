@@ -3,8 +3,9 @@ mod common;
 use common::sample_record;
 use rivet::error::CodecError;
 use std::error::Error;
-use std::fs::read;
 use std::fs::write;
+use std::fs::{OpenOptions, read};
+use std::io::Write;
 
 use rivet::{
     error::StorageError,
@@ -57,7 +58,7 @@ fn reopening_log_preserves_existing_bytes() {
         read(&path).expect("existing log should remain readable after reopening");
 
     assert_eq!(
-        original_file_bytes, reopened_file_bytes,
+        reopened_file_bytes, original_file_bytes,
         "reopening the log should preserve the existing file bytes"
     );
 }
@@ -81,7 +82,7 @@ fn append_one_record_writes_expected_encoded_bytes() {
     let file_bytes = read(&path).expect("reading the log file should succeed");
 
     assert_eq!(
-        expected_bytes, file_bytes,
+        file_bytes, expected_bytes,
         "appending a record should write the expected encoded bytes"
     );
 }
@@ -204,7 +205,7 @@ fn codec_rejection_leaves_file_unchanged() {
     let file_bytes2 = read(&path).expect("reading the log file should succeed");
 
     assert_eq!(
-        file_bytes1, file_bytes2,
+        file_bytes2, file_bytes1,
         "appending an oversized record should leave the file unchanged"
     );
 }
@@ -277,7 +278,7 @@ fn scanning_one_record_preserves_all_fields() {
         .expect("scanning a log with one record should yield a record")
         .expect("scanning a log with one record should yield a valid record");
 
-    assert_eq!(record, scanned_record);
+    assert_eq!(scanned_record, record);
 }
 
 #[test]
@@ -314,10 +315,10 @@ fn scanning_many_records_preserves_offset_order_and_contents() {
         .expect("scanning a log with many records should succeed");
 
     assert_eq!(
-        records,
         scanner
             .collect::<Result<Vec<_>, _>>()
             .expect("scanning a log with many records should yield valid records"),
+        records,
         "scanning a log with many records should yield the same records in the same order"
     );
 }
@@ -346,10 +347,10 @@ fn scanning_reopened_log_preserves_all_records() {
     let scanner = log.scan().expect("scanning a reopened log should succeed");
 
     assert_eq!(
-        vec![record1, record2, record3],
         scanner
             .collect::<Result<Vec<_>, _>>()
             .expect("scanning a reopened log should yield valid records"),
+        vec![record1, record2, record3],
         "scanning a reopened log should yield the same records in the same order"
     );
 }
@@ -375,7 +376,7 @@ fn append_after_scanning_writes_at_end() {
         .expect("scanning a log with one record should yield a record")
         .expect("scanning a log with one record should yield a valid record");
 
-    assert_eq!(record1, scanned_record1);
+    assert_eq!(scanned_record1, record1);
 
     drop(scanner);
 
@@ -393,10 +394,10 @@ fn append_after_scanning_writes_at_end() {
         read(&path).expect("reading the log file after appending the second record should succeed");
 
     assert_eq!(
-        vec![record1, record2],
         scanner
             .collect::<Result<Vec<_>, _>>()
             .expect("scanning a log with two records should yield valid records"),
+        vec![record1, record2],
         "scanning a log with two records should yield the same records in the same order"
     );
     assert!(
@@ -910,10 +911,238 @@ fn append_after_partial_scan_preserves_unread_records() {
         .expect("creating the scanner after appending should succeed");
 
     assert_eq!(
-        all_records,
         scanner
             .collect::<Result<Vec<_>, _>>()
             .expect("scanning a log after appending should yield valid records"),
+        all_records,
         "scanning a log after appending should yield all records including the newly appended one"
+    );
+}
+
+#[test]
+fn recovery_restores_next_offset_after_zero_records() {
+    let dir = tempfile::tempdir().expect("temporary directory should be created");
+    let path = dir.path().join("zero.log");
+    let (mut log, next_offset) =
+        Log::open(&path, RecordLimits::default()).expect("opening the log should succeed");
+    assert_eq!(next_offset, 0, "next offset should be 0 for an empty log");
+    let record = sample_record(next_offset);
+    log.append(&record)
+        .expect("appending a record should succeed");
+    drop(log);
+    let (_, next_offset) =
+        Log::open(&path, RecordLimits::default()).expect("reopening the log should succeed");
+    assert_eq!(
+        next_offset, 1,
+        "next offset should be 1 after appending one record"
+    );
+}
+
+#[test]
+fn recovery_restores_next_offset_after_one_record() {
+    let dir = tempfile::tempdir().expect("temporary directory should be created");
+    let path = dir.path().join("one.log");
+    let (mut log, next_offset) =
+        Log::open(&path, RecordLimits::default()).expect("opening the log should succeed");
+    assert_eq!(next_offset, 0, "next offset should be 0 for an empty log");
+
+    let record1 = sample_record(next_offset);
+    log.append(&record1)
+        .expect("appending a record should succeed");
+    drop(log);
+
+    let (mut log, next_offset) =
+        Log::open(&path, RecordLimits::default()).expect("reopening the log should succeed");
+    assert_eq!(
+        next_offset, 1,
+        "next offset should be 1 after appending one record"
+    );
+
+    let record2 = sample_record(next_offset);
+    log.append(&record2)
+        .expect("appending a second record should succeed");
+    drop(log);
+
+    let (log, next_offset) =
+        Log::open(&path, RecordLimits::default()).expect("reopening the log should succeed");
+    assert_eq!(
+        next_offset, 2,
+        "next offset should be 2 after appending two records"
+    );
+
+    let scanner = log.scan().expect("scanning the log should succeed");
+    let records = scanner
+        .collect::<Result<Vec<_>, _>>()
+        .expect("scanning the original log should succeed");
+    assert_eq!(
+        records,
+        vec![record1, record2],
+        "scanned records should match appended records"
+    );
+}
+
+#[test]
+fn recovery_restores_next_offset_after_one_hundred_records() {
+    let dir = tempfile::tempdir().expect("temporary directory should be created");
+    let path = dir.path().join("one_hundred.log");
+    let mut records = Vec::new();
+    let (mut log, next_offset) =
+        Log::open(&path, RecordLimits::default()).expect("opening the log should succeed");
+    assert_eq!(next_offset, 0, "next offset should be 0 for an empty log");
+
+    for i in 0..100 {
+        let record = sample_record(next_offset + i);
+        log.append(&record)
+            .expect("appending a record should succeed");
+        records.push(record);
+    }
+    drop(log);
+
+    let (mut log, next_offset) =
+        Log::open(&path, RecordLimits::default()).expect("reopening the log should succeed");
+    assert_eq!(
+        next_offset, 100,
+        "next offset should be 100 after appending 100 records"
+    );
+    let scanner = log.scan().expect("scanning the log should succeed");
+    let scanned_records = scanner
+        .collect::<Result<Vec<_>, _>>()
+        .expect("scanning the reopened log should succeed");
+    assert_eq!(
+        scanned_records, records,
+        "scanned records should match appended records after recovery"
+    );
+
+    let record101 = sample_record(next_offset);
+    log.append(&record101)
+        .expect("appending the 101st record should succeed");
+    drop(log);
+
+    let (log, next_offset) =
+        Log::open(&path, RecordLimits::default()).expect("reopening the log should succeed");
+    assert_eq!(
+        next_offset, 101,
+        "next offset should be 101 after appending 101 records"
+    );
+    let scanner = log.scan().expect("scanning the log should succeed");
+    let scanned_records = scanner
+        .collect::<Result<Vec<_>, _>>()
+        .expect("scanning the reopened log should succeed");
+    let mut all_records = records;
+    all_records.push(record101);
+    assert_eq!(
+        scanned_records, all_records,
+        "scanned records should match appended records after recovery"
+    );
+}
+
+#[test]
+fn recovery_truncates_every_incomplete_record_prefix() {
+    let dir = tempfile::tempdir().expect("temporary directory should be created");
+    let encoded_bytes = sample_record(1)
+        .encode(&RecordLimits::default())
+        .expect("encoding the second record should succeed");
+
+    for n in 0..encoded_bytes.len() {
+        let record = sample_record(0);
+        let path = dir.path().join(format!("trunc-{}.log", n));
+        let (mut log, next_offset) =
+            Log::open(&path, RecordLimits::default()).expect("opening the log should succeed");
+        assert_eq!(next_offset, 0, "next offset should be 0 for an empty log");
+
+        log.append(&record)
+            .expect("appending the first record should succeed");
+
+        drop(log);
+
+        let bytes = &encoded_bytes[..n];
+
+        let mut file = OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .expect("opening the log file for appending should succeed");
+
+        file.write_all(bytes)
+            .expect("writing the partial record bytes should succeed");
+        drop(file);
+
+        let (mut log, next_offset) =
+            Log::open(&path, RecordLimits::default()).expect("reopening the log should succeed");
+        assert_eq!(
+            next_offset, 1,
+            "next offset should remain 1 after truncating the incomplete record prefix"
+        );
+
+        let mut scanner = log.scan().expect("scanning the log should succeed");
+        let scanned_record = scanner
+            .next()
+            .expect("scanning the log should yield the first record")
+            .expect("scanning the log should succeed");
+        assert_eq!(
+            scanned_record, record,
+            "the first scanned record should match the appended record"
+        );
+        assert_eq!(
+            std::fs::read(&path).expect("reading the log file should succeed"),
+            record
+                .encode(&RecordLimits::default())
+                .expect("encoding the first record should succeed")
+        );
+
+        let second_record = sample_record(next_offset);
+        log.append(&second_record)
+            .expect("appending the record after recovery should succeed");
+
+        let scanner = log
+            .scan()
+            .expect("scanning the log after appending should succeed");
+        let scanned_records = scanner
+            .collect::<Result<Vec<_>, _>>()
+            .expect("scanning the log after appending should succeed");
+        assert_eq!(
+            scanned_records,
+            vec![record, second_record],
+            "scanned records should include the newly appended record"
+        );
+    }
+}
+
+#[test]
+fn repeated_recovery_preserves_file_bytes_and_next_offset() {
+    todo!(
+        "{}",
+        "Recover a log with complete records and an incomplete tail, capture its bytes and next offset, then reopen again and verify identical bytes, records, and next offset."
+    );
+}
+
+#[test]
+fn recovery_rejects_offset_gaps_without_modifying_file() {
+    todo!(
+        "{}",
+        "Write validly encoded records with offsets 0 and 2. Opening must return UnexpectedOffset { expected: 1, actual: 2 } and leave all file bytes unchanged. Also cover a first record whose offset is not zero."
+    );
+}
+
+#[test]
+fn recovery_rejects_duplicate_offsets_without_modifying_file() {
+    todo!(
+        "{}",
+        "Write validly encoded records with offsets 0 and 0. Opening must return UnexpectedOffset { expected: 1, actual: 0 } and leave all file bytes unchanged."
+    );
+}
+
+#[test]
+fn recovery_rejects_regressing_offsets_without_modifying_file() {
+    todo!(
+        "{}",
+        "Write validly encoded records with offsets 0, 1, and 0. Opening must return UnexpectedOffset { expected: 2, actual: 0 } and leave all file bytes unchanged."
+    );
+}
+
+#[test]
+fn recovery_rejects_mid_log_corruption_without_modifying_file() {
+    todo!(
+        "{}",
+        "Place a complete malformed record between valid records. Cover invalid magic and a payload mutation causing InvalidChecksum. Opening must return the corresponding codec error and preserve the entire file, including records after the corruption."
     );
 }
