@@ -675,35 +675,282 @@ fn codec_rejection_allows_later_valid_appends() {
 
 #[test]
 fn scanning_relative_path_survives_working_directory_change() {
-    todo!(
-        "Use an isolated child process so changing the working directory cannot affect parallel tests; open a relative log path, append a record, change directories, then verify scanning still reads the opened log"
+    const CHILD_MARKER: &str = "RIVET_CWD_TEST_CHILD";
+    const DESTINATION: &str = "RIVET_CWD_TEST_DEST";
+
+    if std::env::var_os(CHILD_MARKER).is_none() {
+        // The parent owns these directories until the child has exited.
+        let original = tempfile::tempdir().expect("original directory should be created");
+        let destination = tempfile::tempdir().expect("destination directory should be created");
+        let destination_path = destination
+            .path()
+            .canonicalize()
+            .expect("destination should have an absolute path");
+
+        // Re-run only this test in a separate process. The marker makes that
+        // invocation execute the assertions instead of spawning another child.
+        let output = std::process::Command::new(
+            std::env::current_exe().expect("test executable should be located"),
+        )
+        .args([
+            "--exact",
+            "scanning_relative_path_survives_working_directory_change",
+            "--nocapture",
+        ])
+        .env(CHILD_MARKER, "1")
+        .env(DESTINATION, destination_path)
+        .current_dir(original.path())
+        .output()
+        .expect("child test process should run");
+
+        assert!(
+            output.status.success(),
+            "child test failed ({})\nstdout:\n{}\nstderr:\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+        return;
+    }
+
+    let record = sample_record(0);
+    let mut log = Log::open(std::path::Path::new("events.log"), RecordLimits::default())
+        .expect("opening a relative log path should succeed");
+    log.append(&record)
+        .expect("appending a record should succeed");
+
+    // Only the child changes directory, so parallel tests remain unaffected.
+    let destination = std::env::var_os(DESTINATION).expect("parent should supply the destination");
+    std::env::set_current_dir(destination).expect("changing directory should succeed");
+
+    let records = log
+        .scan()
+        .expect("creating a scanner after changing directory should succeed")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("scanning the opened log should succeed");
+    assert_eq!(
+        records,
+        vec![record],
+        "scanning should read the original log after changing directory"
     );
 }
 
 #[test]
 fn scanning_renamed_log_reads_original_file() {
-    todo!(
-        "Open a log and append a record, rename the file while the log remains open, then verify a new scanner still reads the original record"
+    let record = sample_record(0);
+    let dir = tempfile::tempdir().expect("temporary directory should be created");
+    let path = dir.path().join("original.log");
+    let mut log =
+        Log::open(&path, RecordLimits::default()).expect("opening the log should succeed");
+
+    log.append(&record)
+        .expect("appending a record should succeed");
+
+    std::fs::rename(&path, dir.path().join("renamed.log"))
+        .expect("renaming the log file should succeed");
+
+    let renamed_path = dir.path().join("renamed.log");
+    let renamed_log = Log::open(&renamed_path, RecordLimits::default())
+        .expect("opening the renamed log should succeed");
+    let scanner = renamed_log
+        .scan()
+        .expect("creating a scanner for the renamed log should succeed");
+    let records = scanner
+        .collect::<Result<Vec<_>, _>>()
+        .expect("scanning the renamed log should succeed");
+    assert_eq!(
+        records,
+        vec![record],
+        "scanning the renamed log should read the original record"
     );
 }
 
 #[test]
 fn scanning_replaced_path_reads_original_file() {
-    todo!(
-        "Open a log and append a record, rename its file and create a different valid log at the original path, then append another record through the original Log; verify a new scanner reads both original-log records and no replacement-log records"
+    let original_only_record = sample_record(0);
+    let shared_record = sample_record(1);
+    let replacement_only_record = sample_record(2);
+    let dir = tempfile::tempdir().expect("temporary directory should be created");
+    let path = dir.path().join("original.log");
+    let mut log =
+        Log::open(&path, RecordLimits::default()).expect("opening the log should succeed");
+
+    log.append(&original_only_record)
+        .expect("appending a record should succeed");
+
+    std::fs::rename(&path, dir.path().join("renamed.log"))
+        .expect("renaming the log file should succeed");
+
+    let mut replacement_log = Log::open(&path, RecordLimits::default())
+        .expect("opening the replacement log should succeed");
+
+    replacement_log
+        .append(&shared_record)
+        .expect("appending a record to the replacement log should succeed");
+
+    log.append(&shared_record)
+        .expect("appending a record through the original log should succeed");
+    replacement_log
+        .append(&replacement_only_record)
+        .expect("appending a new record through the replacement log should succeed");
+
+    let scanner = log
+        .scan()
+        .expect("creating a scanner for the original log should succeed");
+    let records = scanner
+        .collect::<Result<Vec<_>, _>>()
+        .expect("scanning the original log should succeed");
+
+    assert_eq!(
+        records,
+        vec![original_only_record, shared_record],
+        "scanning the original log should read the original and shared records"
     );
 }
 
 #[test]
 fn simultaneous_scanners_have_independent_positions() {
-    todo!(
-        "Append enough varied-size records to exceed the reader buffer capacity several times, create two scanners, and interleave their next calls at different rates across buffer refills; verify each scanner independently yields every record in order and reaches EOF"
+    let record_count: usize = 99;
+    let dir = tempfile::tempdir().expect("temporary directory should be created");
+    let path = dir.path().join("original.log");
+    let mut log =
+        Log::open(&path, RecordLimits::default()).expect("opening the log should succeed");
+    let mut expected_records = Vec::with_capacity(record_count);
+
+    for n in 0..record_count {
+        let payload_len = 100 + (n * 137) % 2000;
+        let byte = (n % 256) as u8;
+        let payload = vec![byte; payload_len];
+        let offset = u64::try_from(n).expect("n should fit into u64");
+        let timestamp = 1_700_000_000;
+        let record = record_with_fields(offset, timestamp, None, payload);
+        log.append(&record)
+            .expect("appending a record should succeed");
+        expected_records.push(record);
+    }
+
+    let mut scanner1 = log
+        .scan()
+        .expect("creating the first scanner should succeed");
+    let mut scanner2 = log
+        .scan()
+        .expect("creating the second scanner should succeed");
+
+    let mut scanner1_index = 0;
+    let mut scanner2_index = 0;
+
+    while scanner1_index < record_count {
+        let mut z = 0;
+        while z < 3 && scanner1_index < record_count {
+            let result = scanner1.next();
+            match result {
+                Some(Ok(record)) => {
+                    assert_eq!(
+                        record, expected_records[scanner1_index],
+                        "scanner1 should yield the expected record"
+                    );
+                }
+                Some(Err(e)) => panic!("scanner1 encountered an error: {:?}", e),
+                None => panic!("scanner1 reached EOF unexpectedly"),
+            }
+            z += 1;
+            scanner1_index += 1;
+        }
+        let result2 = scanner2.next();
+        match result2 {
+            Some(Ok(record)) => {
+                assert_eq!(
+                    record, expected_records[scanner2_index],
+                    "scanner2 should yield the expected record"
+                );
+            }
+            Some(Err(e)) => panic!("scanner2 encountered an error: {:?}", e),
+            None => panic!("scanner2 reached EOF unexpectedly"),
+        }
+        scanner2_index += 1;
+    }
+
+    while scanner2_index < record_count {
+        let result = scanner2.next();
+        match result {
+            Some(Ok(record)) => {
+                assert_eq!(
+                    record, expected_records[scanner2_index],
+                    "scanner2 should yield the expected record"
+                );
+            }
+            Some(Err(e)) => panic!("scanner2 encountered an error: {:?}", e),
+            None => panic!("scanner2 reached EOF unexpectedly"),
+        }
+        scanner2_index += 1;
+    }
+
+    assert!(
+        scanner1.next().is_none(),
+        "scanner1 should have reached EOF"
+    );
+    assert!(
+        scanner2.next().is_none(),
+        "scanner2 should have reached EOF"
     );
 }
 
 #[test]
 fn append_after_partial_scan_preserves_unread_records() {
-    todo!(
-        "Append enough records to exceed the reader buffer capacity several times, read only the first record and drop the scanner, then append another record; verify the original file prefix is unchanged and a fresh scan yields all original records followed by the new record"
+    let record_count: usize = 99;
+    let dir = tempfile::tempdir().expect("temporary directory should be created");
+    let path = dir.path().join("original.log");
+    let mut log =
+        Log::open(&path, RecordLimits::default()).expect("opening the log should succeed");
+    let mut expected_records = Vec::with_capacity(record_count);
+
+    for n in 0..record_count {
+        let payload_len = 100 + (n * 137) % 2000;
+        let byte = (n % 256) as u8;
+        let payload = vec![byte; payload_len];
+        let offset = u64::try_from(n).expect("n should fit into u64");
+        let timestamp = 1_700_000_000;
+        let record = record_with_fields(offset, timestamp, None, payload);
+        log.append(&record)
+            .expect("appending a record should succeed");
+        expected_records.push(record);
+    }
+
+    let mut scanner = log
+        .scan()
+        .expect("creating the first scanner should succeed");
+
+    let result = scanner.next();
+    match result {
+        Some(Ok(record)) => {
+            assert_eq!(
+                record, expected_records[0],
+                "scanner should yield the expected record"
+            );
+        }
+        Some(Err(e)) => panic!("scanner1 encountered an error: {:?}", e),
+        None => panic!("scanner1 reached EOF unexpectedly"),
+    }
+
+    drop(scanner);
+
+    let record = sample_record(u64::try_from(record_count).expect("should fit into u64"));
+
+    log.append(&record)
+        .expect("appending a record should succeed");
+
+    let mut all_records = expected_records;
+    all_records.push(record);
+
+    scanner = log
+        .scan()
+        .expect("creating the scanner after appending should succeed");
+
+    assert_eq!(
+        all_records,
+        scanner
+            .collect::<Result<Vec<_>, _>>()
+            .expect("scanning a log after appending should yield valid records"),
+        "scanning a log after appending should yield all records including the newly appended one"
     );
 }

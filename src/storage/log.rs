@@ -49,9 +49,9 @@ impl<'a> std::io::Read for Reader<'a> {
         match self.file.seek_read(buf, self.position) {
             Ok(bytes_read) => {
                 self.position += bytes_read as u64;
-                Ok(bytes_read)
+                return Ok(bytes_read);
             }
-            Err(e) => Err(e),
+            Err(e) => return Err(e),
         }
     }
 }
@@ -402,8 +402,8 @@ mod tests {
         Log::write_record(&mut writer, &mut append_failed, &record1_bytes)
             .expect("first record should succeed");
 
-        assert_eq!(
-            append_failed, false,
+        assert!(
+            !append_failed,
             "append_failed should be false after a successful write"
         );
 
