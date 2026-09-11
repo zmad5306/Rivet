@@ -410,7 +410,7 @@ fn append_after_scanning_writes_at_end() {
 }
 
 #[test]
-fn scanning_partial_header_returns_incomplete_header() {
+fn opening_truncates_partial_trailing_header() {
     let record1 = sample_record(0);
     let record2 = sample_record(1);
     let record1_bytes = record1
@@ -428,11 +428,11 @@ fn scanning_partial_header_returns_incomplete_header() {
         .expect("writing a complete record followed by a partial header should succeed");
 
     let log = Log::open(&path, RecordLimits::default())
-        .expect("opening the log with a partial header should succeed");
+        .expect("opening should recover the log by truncating the partial trailing header");
 
     let mut scanner = log
         .scan()
-        .expect("creating a scanner for the log with a partial header should succeed");
+        .expect("creating a scanner for the recovered log should succeed");
 
     let record1_from_log = match scanner.next() {
         Some(Ok(record)) => record,
@@ -445,28 +445,20 @@ fn scanning_partial_header_returns_incomplete_header() {
         "the first record read from the log should match the first record written"
     );
 
-    let error = match scanner.next() {
-        Some(Err(error)) => error,
-        Some(Ok(record)) => panic!(
-            "expected an incomplete header error, got a valid record: {:?}",
-            record
-        ),
-        None => panic!("expected an incomplete header error, got None"),
-    };
-
-    assert!(matches!(
-        error,
-        StorageError::Codec(CodecError::IncompleteHeader)
-    ));
-
     assert!(
         scanner.next().is_none(),
-        "expected no more records after the incomplete header"
+        "the recovered log should end after the last complete record"
+    );
+
+    assert_eq!(
+        std::fs::read(&path).expect("reading the recovered file should succeed"),
+        record1_bytes,
+        "recovery should preserve the complete record and remove only the incomplete tail"
     );
 }
 
 #[test]
-fn scanning_partial_body_returns_incomplete_body() {
+fn opening_truncates_partial_trailing_body() {
     let record1 = sample_record(0);
     let record2 = sample_record(1);
     let record1_bytes = record1
@@ -484,11 +476,11 @@ fn scanning_partial_body_returns_incomplete_body() {
         .expect("writing a complete record followed by a partial body should succeed");
 
     let log = Log::open(&path, RecordLimits::default())
-        .expect("opening the log with a partial body should succeed");
+        .expect("opening should recover the log by truncating the partial trailing body");
 
     let mut scanner = log
         .scan()
-        .expect("creating a scanner for the log with a partial body should succeed");
+        .expect("creating a scanner for the recovered log should succeed");
 
     let record1_from_log = match scanner.next() {
         Some(Ok(record)) => record,
@@ -501,28 +493,20 @@ fn scanning_partial_body_returns_incomplete_body() {
         "the first record read from the log should match the first record written"
     );
 
-    let error = match scanner.next() {
-        Some(Err(error)) => error,
-        Some(Ok(record)) => panic!(
-            "expected an incomplete body error, got a valid record: {:?}",
-            record
-        ),
-        None => panic!("expected an incomplete body error, got None"),
-    };
-
-    assert!(matches!(
-        error,
-        StorageError::Codec(CodecError::IncompleteBody)
-    ));
-
     assert!(
         scanner.next().is_none(),
-        "expected no more records after the incomplete body"
+        "the recovered log should end after the last complete record"
+    );
+
+    assert_eq!(
+        std::fs::read(&path).expect("reading the recovered file should succeed"),
+        record1_bytes,
+        "recovery should preserve the complete record and remove only the incomplete tail"
     );
 }
 
 #[test]
-fn scanning_partial_checksum_returns_incomplete_body() {
+fn opening_truncates_partial_trailing_checksum() {
     let record1 = sample_record(0);
     let record2 = sample_record(1);
     let record1_bytes = record1
@@ -540,11 +524,11 @@ fn scanning_partial_checksum_returns_incomplete_body() {
         .expect("writing a complete record followed by a partial checksum should succeed");
 
     let log = Log::open(&path, RecordLimits::default())
-        .expect("opening the log with a partial checksum should succeed");
+        .expect("opening should recover the log by truncating the partial trailing checksum");
 
     let mut scanner = log
         .scan()
-        .expect("creating a scanner for the log with a partial checksum should succeed");
+        .expect("creating a scanner for the recovered log should succeed");
 
     let record1_from_log = match scanner.next() {
         Some(Ok(record)) => record,
@@ -557,28 +541,20 @@ fn scanning_partial_checksum_returns_incomplete_body() {
         "the first record read from the log should match the first record written"
     );
 
-    let error = match scanner.next() {
-        Some(Err(error)) => error,
-        Some(Ok(record)) => panic!(
-            "expected an incomplete checksum error, got a valid record: {:?}",
-            record
-        ),
-        None => panic!("expected an incomplete checksum error, got None"),
-    };
-
-    assert!(matches!(
-        error,
-        StorageError::Codec(CodecError::IncompleteBody)
-    ));
-
     assert!(
         scanner.next().is_none(),
-        "expected no more records after the incomplete checksum"
+        "the recovered log should end after the last complete record"
+    );
+
+    assert_eq!(
+        std::fs::read(&path).expect("reading the recovered file should succeed"),
+        record1_bytes,
+        "recovery should preserve the complete record and remove only the incomplete tail"
     );
 }
 
 #[test]
-fn scanning_corrupt_record_preserves_codec_error() {
+fn opening_rejects_invalid_checksum_without_modifying_file() {
     let record = sample_record(0);
     let mut bytes = record
         .encode(&RecordLimits::default())
@@ -591,25 +567,13 @@ fn scanning_corrupt_record_preserves_codec_error() {
 
     write(&path, &bytes).expect("writing the corrupt record should succeed");
 
-    let log = Log::open(&path, RecordLimits::default())
-        .expect("opening the log with a corrupt record should succeed");
-
-    let mut scanner = log
-        .scan()
-        .expect("creating a scanner for the log with a corrupt record should succeed");
-
-    let error = match scanner.next() {
-        Some(Err(error)) => error,
-        Some(Ok(record)) => panic!(
-            "expected a corrupt record error, got a valid record: {:?}",
-            record
-        ),
-        None => panic!("expected a corrupt record error, got None"),
-    };
+    let error = Log::open(&path, RecordLimits::default()).expect_err(
+        "opening a log with a complete record containing an invalid checksum should fail",
+    );
 
     assert!(
         matches!(error, StorageError::Codec(CodecError::InvalidChecksum)),
-        "expected a corrupt record error with an invalid checksum"
+        "opening should report CodecError::InvalidChecksum"
     );
 
     assert!(
@@ -620,9 +584,10 @@ fn scanning_corrupt_record_preserves_codec_error() {
         "expected the source of the error to be a CodecError::InvalidChecksum"
     );
 
-    assert!(
-        scanner.next().is_none(),
-        "expected no more records after the corrupt record"
+    assert_eq!(
+        std::fs::read(&path).expect("reading the corrupt file should succeed"),
+        bytes,
+        "failed recovery must leave the corrupt file unchanged"
     );
 }
 

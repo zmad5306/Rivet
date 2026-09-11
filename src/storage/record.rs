@@ -60,6 +60,19 @@ impl Record {
         self.payload.as_ref()
     }
 
+    pub fn encoded_len(&self) -> Result<usize, CodecError> {
+        let key_len = self.key().map_or(0, |k| k.len());
+        let payload_len = self.payload().len();
+
+        let total_len = HEADER_LENGTH
+            .checked_add(key_len)
+            .and_then(|len| len.checked_add(payload_len))
+            .and_then(|len| len.checked_add(4)) // CRC32 checksum
+            .ok_or(CodecError::LengthOverflow)?;
+
+        Ok(total_len)
+    }
+
     fn check_len(len: usize, max: u32, error: CodecError) -> Result<u32, CodecError> {
         match u32::try_from(len) {
             Ok(l) => {
