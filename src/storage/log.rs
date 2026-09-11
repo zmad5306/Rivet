@@ -49,9 +49,9 @@ impl<'a> std::io::Read for Reader<'a> {
         match self.file.seek_read(buf, self.position) {
             Ok(bytes_read) => {
                 self.position += bytes_read as u64;
-                return Ok(bytes_read);
+                Ok(bytes_read)
             }
-            Err(e) => return Err(e),
+            Err(e) => Err(e),
         }
     }
 }
