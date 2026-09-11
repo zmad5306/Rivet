@@ -1171,9 +1171,90 @@ fn repeated_recovery_preserves_file_bytes_and_next_offset() {
 
 #[test]
 fn recovery_rejects_offset_gaps_without_modifying_file() {
-    todo!(
-        "{}",
-        "Write validly encoded records with offsets 0 and 2. Opening must return UnexpectedOffset { expected: 1, actual: 2 } and leave all file bytes unchanged. Also cover a first record whose offset is not zero."
+    let record1 = sample_record(0);
+    let record1_bytes = record1
+        .encode(&RecordLimits::default())
+        .expect("encoding record1 should succeed");
+    let record2 = sample_record(2);
+    let record2_bytes = record2
+        .encode(&RecordLimits::default())
+        .expect("encoding record2 should succeed");
+
+    let dir = tempfile::tempdir().expect("temporary directory should be created");
+    let path = dir.path().join("gaps.log");
+
+    let mut file = OpenOptions::new()
+        .append(true)
+        .create(true)
+        .open(&path)
+        .expect("opening the log file for appending should succeed");
+    file.write_all(&record1_bytes)
+        .expect("writing the first record bytes should succeed");
+    file.write_all(&record2_bytes)
+        .expect("writing the second record bytes should succeed");
+
+    drop(file);
+
+    let error = Log::open(&path, RecordLimits::default())
+        .expect_err("opening the log with offset gaps should fail");
+    let log_bytes_after_error =
+        std::fs::read(&path).expect("reading the log file bytes should succeed");
+
+    assert!(
+        matches!(
+            error,
+            StorageError::UnexpectedOffset {
+                expected: 1,
+                actual: 2
+            }
+        ),
+        "error should be UnexpectedOffset with expected 1 and actual 2"
+    );
+    assert_eq!(
+        log_bytes_after_error,
+        [&record1_bytes[..], &record2_bytes[..]].concat(),
+        "log bytes should be unchanged after failing to open due to offset gaps"
+    );
+}
+
+#[test]
+fn recovery_rejects_offset_gaps_at_beginning_without_modifying_file() {
+    let record = sample_record(1);
+    let record_bytes = record
+        .encode(&RecordLimits::default())
+        .expect("encoding record should succeed");
+
+    let dir = tempfile::tempdir().expect("temporary directory should be created");
+    let path = dir.path().join("initial_gaps.log");
+
+    let mut file = OpenOptions::new()
+        .append(true)
+        .create(true)
+        .open(&path)
+        .expect("opening the log file for appending should succeed");
+    file.write_all(&record_bytes)
+        .expect("writing the record bytes should succeed");
+
+    drop(file);
+
+    let error = Log::open(&path, RecordLimits::default())
+        .expect_err("opening the log with offset gaps should fail");
+    let log_bytes_after_error =
+        std::fs::read(&path).expect("reading the log file bytes should succeed");
+
+    assert!(
+        matches!(
+            error,
+            StorageError::UnexpectedOffset {
+                expected: 0,
+                actual: 1
+            }
+        ),
+        "error should be UnexpectedOffset with expected 0 and actual 1"
+    );
+    assert_eq!(
+        log_bytes_after_error, record_bytes,
+        "log bytes should be unchanged after failing to open due to offset gaps"
     );
 }
 
