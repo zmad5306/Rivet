@@ -69,7 +69,7 @@ mod tests {
 
         let result = partition.publish(input);
 
-        assert_eq!(result, Ok(0));
+        assert_eq!(result, Ok(0), "publish should assign offset 0");
     }
 
     #[test]
@@ -85,9 +85,9 @@ mod tests {
         let result2 = partition.publish(input2);
         let result3 = partition.publish(input3);
 
-        assert_eq!(result1, Ok(0));
-        assert_eq!(result2, Ok(1));
-        assert_eq!(result3, Ok(2));
+        assert_eq!(result1, Ok(0), "publish should assign offset 0");
+        assert_eq!(result2, Ok(1), "publish should assign offset 1");
+        assert_eq!(result3, Ok(2), "publish should assign offset 2");
     }
 
     #[test]
@@ -107,23 +107,59 @@ mod tests {
         let result2 = partition.publish(input2);
         let result3 = partition.publish(input3);
 
-        assert_eq!(result1, Ok(0));
-        assert_eq!(result2, Ok(1));
-        assert_eq!(result3, Ok(2));
+        assert_eq!(result1, Ok(0), "publish should assign offset 0");
+        assert_eq!(result2, Ok(1), "publish should assign offset 1");
+        assert_eq!(result3, Ok(2), "publish should assign offset 2");
 
         let record1 = partition.read(0).expect("record at offset 0 should exist");
         let record2 = partition.read(1).expect("record at offset 1 should exist");
         let record3 = partition.read(2).expect("record at offset 2 should exist");
 
-        assert_eq!(record1.offset(), 0);
-        assert_eq!(record2.offset(), 1);
-        assert_eq!(record3.offset(), 2);
-        assert_eq!(record1.key(), Some(&[10, 20, 30][..]));
-        assert_eq!(record2.key(), Some(&[20, 30, 40][..]));
-        assert_eq!(record3.key(), Some(&[30, 40, 50][..]));
-        assert_eq!(record1.payload(), &[1, 2, 3]);
-        assert_eq!(record2.payload(), &[2, 3, 4]);
-        assert_eq!(record3.payload(), &[3, 4, 5]);
+        assert_eq!(
+            record1.offset(),
+            0,
+            "read returns the record at each assigned offset: offset should match the expected value"
+        );
+        assert_eq!(
+            record2.offset(),
+            1,
+            "read returns the record at each assigned offset: offset should match the expected value"
+        );
+        assert_eq!(
+            record3.offset(),
+            2,
+            "read returns the record at each assigned offset: offset should match the expected value"
+        );
+        assert_eq!(
+            record1.key(),
+            Some(&[10, 20, 30][..]),
+            "read returns the record at each assigned offset: key should match the expected value"
+        );
+        assert_eq!(
+            record2.key(),
+            Some(&[20, 30, 40][..]),
+            "read returns the record at each assigned offset: key should match the expected value"
+        );
+        assert_eq!(
+            record3.key(),
+            Some(&[30, 40, 50][..]),
+            "read returns the record at each assigned offset: key should match the expected value"
+        );
+        assert_eq!(
+            record1.payload(),
+            &[1, 2, 3],
+            "read returns the record at each assigned offset: payload should match the expected value"
+        );
+        assert_eq!(
+            record2.payload(),
+            &[2, 3, 4],
+            "read returns the record at each assigned offset: payload should match the expected value"
+        );
+        assert_eq!(
+            record3.payload(),
+            &[3, 4, 5],
+            "read returns the record at each assigned offset: payload should match the expected value"
+        );
     }
 
     #[test]
@@ -132,7 +168,10 @@ mod tests {
 
         let result = partition.read(0);
 
-        assert!(result.is_none());
+        assert!(
+            result.is_none(),
+            "reading an unavailable offset should return None"
+        );
     }
 
     #[test]
@@ -145,8 +184,11 @@ mod tests {
         let result = partition.publish(input);
         let record = partition.read(42);
 
-        assert_eq!(result, Ok(0));
-        assert!(record.is_none());
+        assert_eq!(result, Ok(0), "publish should assign offset 0");
+        assert!(
+            record.is_none(),
+            "reading an unavailable offset should return None"
+        );
     }
 
     #[test]
@@ -159,9 +201,17 @@ mod tests {
         let result = partition.publish(input);
         let record = partition.read(0).expect("record at offset 0 should exist");
 
-        assert_eq!(result, Ok(0));
-        assert_eq!(record.key(), Some(&[0xFF, 0x00, 0x80][..]));
-        assert_eq!(record.payload(), &[0xFE, 0x00, 0x81]);
+        assert_eq!(result, Ok(0), "publish should assign offset 0");
+        assert_eq!(
+            record.key(),
+            Some(&[0xFF, 0x00, 0x80][..]),
+            "publish and read preserve binary key and payload: key should match the expected value"
+        );
+        assert_eq!(
+            record.payload(),
+            &[0xFE, 0x00, 0x81],
+            "publish and read preserve binary key and payload: payload should match the expected value"
+        );
     }
 
     #[test]
@@ -176,14 +226,22 @@ mod tests {
         let result1 = partition.publish(input1);
         let result2 = partition.publish(input2);
 
-        assert_eq!(result1, Ok(0));
-        assert_eq!(result2, Ok(1));
+        assert_eq!(result1, Ok(0), "publish should assign offset 0");
+        assert_eq!(result2, Ok(1), "publish should assign offset 1");
 
         let record1 = partition.read(0).expect("record at offset 0 should exist");
         let record2 = partition.read(1).expect("record at offset 1 should exist");
 
-        assert_eq!(record1.key(), None);
-        assert_eq!(record2.key(), Some(&[][..]));
+        assert_eq!(
+            record1.key(),
+            None,
+            "publish and read preserve absent and empty keys: key should match the expected value"
+        );
+        assert_eq!(
+            record2.key(),
+            Some(&[][..]),
+            "publish and read preserve absent and empty keys: key should match the expected value"
+        );
     }
 
     #[test]
@@ -195,11 +253,14 @@ mod tests {
 
         let result = partition.publish(input);
 
-        assert_eq!(result, Ok(0));
+        assert_eq!(result, Ok(0), "publish should assign offset 0");
 
         let record = partition.read(0).expect("record at offset 0 should exist");
 
-        assert!(record.payload().is_empty());
+        assert!(
+            record.payload().is_empty(),
+            "empty payload should remain empty"
+        );
     }
 
     #[test]
@@ -222,13 +283,29 @@ mod tests {
 
         let record1_after = partition.read(0).expect("record at offset 0 should exist");
 
-        assert_eq!(result1, Ok(0));
-        assert_eq!(result2, Ok(1));
+        assert_eq!(result1, Ok(0), "publish should assign offset 0");
+        assert_eq!(result2, Ok(1), "publish should assign offset 1");
 
-        assert_eq!(record1_after.key(), recorded_key.as_deref());
-        assert_eq!(record1_after.offset(), recorded_offset);
-        assert_eq!(record1_after.payload(), recorded_payload);
-        assert_eq!(record1_after.timestamp(), recorded_timestamp);
+        assert_eq!(
+            record1_after.key(),
+            recorded_key.as_deref(),
+            "later publish should preserve the existing record key"
+        );
+        assert_eq!(
+            record1_after.offset(),
+            recorded_offset,
+            "later publish should preserve the existing record offset"
+        );
+        assert_eq!(
+            record1_after.payload(),
+            recorded_payload,
+            "later publish should preserve the existing record payload"
+        );
+        assert_eq!(
+            record1_after.timestamp(),
+            recorded_timestamp,
+            "later publish should preserve the existing record timestamp"
+        );
     }
 
     #[test]
@@ -242,8 +319,15 @@ mod tests {
 
         let result1 = partition.publish(input1);
 
-        assert_eq!(result1, Ok(u64::MAX));
-        assert_eq!(partition.next_offset, None);
+        assert_eq!(
+            result1,
+            Ok(u64::MAX),
+            "publish should assign offset u64::MAX"
+        );
+        assert_eq!(
+            partition.next_offset, None,
+            "offset exhaustion should leave no next offset available"
+        );
 
         let record_before = partition
             .records
@@ -256,19 +340,50 @@ mod tests {
 
         let result2 = partition.publish(input2);
 
-        assert_eq!(result2, Err(PartitionError::OffsetOverflow));
-        assert_eq!(partition.next_offset, None);
-        assert_eq!(recorded_offset, u64::MAX);
+        assert_eq!(
+            result2,
+            Err(PartitionError::OffsetOverflow),
+            "publish at offset limit returns overflow without changing state: expected OffsetOverflow"
+        );
+        assert_eq!(
+            partition.next_offset, None,
+            "offset exhaustion should leave no next offset available"
+        );
+        assert_eq!(
+            recorded_offset,
+            u64::MAX,
+            "final successful publish should use the maximum offset"
+        );
 
         let record_after = partition
             .records
             .first()
             .expect("record at offset 0 should exist");
 
-        assert_eq!(record_after.key(), recorded_key.as_deref());
-        assert_eq!(record_after.offset(), recorded_offset);
-        assert_eq!(record_after.payload(), recorded_payload);
-        assert_eq!(record_after.timestamp(), recorded_timestamp);
-        assert_eq!(partition.records.len(), 1);
+        assert_eq!(
+            record_after.key(),
+            recorded_key.as_deref(),
+            "later publish should preserve the existing record key"
+        );
+        assert_eq!(
+            record_after.offset(),
+            recorded_offset,
+            "later publish should preserve the existing record offset"
+        );
+        assert_eq!(
+            record_after.payload(),
+            recorded_payload,
+            "later publish should preserve the existing record payload"
+        );
+        assert_eq!(
+            record_after.timestamp(),
+            recorded_timestamp,
+            "later publish should preserve the existing record timestamp"
+        );
+        assert_eq!(
+            partition.records.len(),
+            1,
+            "rejected publish should not add a record"
+        );
     }
 }

@@ -5,7 +5,7 @@ pub enum PartitionError {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub enum StorageError {
+pub enum CodecError {
     InvalidMagic,
     UnsupportedVersion,
     KeyTooLarge,
@@ -16,4 +16,62 @@ pub enum StorageError {
     InvalidKeyPresence,
     InvalidKeyLength,
     InvalidChecksum,
+}
+
+impl std::fmt::Display for CodecError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CodecError::InvalidMagic => write!(f, "invalid magic"),
+            CodecError::UnsupportedVersion => write!(f, "unsupported version"),
+            CodecError::KeyTooLarge => write!(f, "key too large"),
+            CodecError::PayloadTooLarge => write!(f, "payload too large"),
+            CodecError::IncompleteHeader => write!(f, "incomplete header"),
+            CodecError::IncompleteBody => write!(f, "incomplete body"),
+            CodecError::LengthOverflow => write!(f, "length overflow"),
+            CodecError::InvalidKeyPresence => write!(f, "invalid key presence"),
+            CodecError::InvalidKeyLength => write!(f, "invalid key length"),
+            CodecError::InvalidChecksum => write!(f, "invalid checksum"),
+        }
+    }
+}
+
+impl std::error::Error for CodecError {}
+
+#[derive(Debug)]
+pub enum StorageError {
+    Codec(CodecError),
+    Io(std::io::Error),
+    AppendDisabled,
+}
+
+impl From<CodecError> for StorageError {
+    fn from(err: CodecError) -> Self {
+        StorageError::Codec(err)
+    }
+}
+
+impl From<std::io::Error> for StorageError {
+    fn from(err: std::io::Error) -> Self {
+        StorageError::Io(err)
+    }
+}
+
+impl std::fmt::Display for StorageError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StorageError::Codec(err) => write!(f, "codec error: {}", err),
+            StorageError::Io(err) => write!(f, "io error: {}", err),
+            StorageError::AppendDisabled => write!(f, "append disabled"),
+        }
+    }
+}
+
+impl std::error::Error for StorageError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            StorageError::Codec(err) => Some(err),
+            StorageError::Io(err) => Some(err),
+            StorageError::AppendDisabled => None,
+        }
+    }
 }

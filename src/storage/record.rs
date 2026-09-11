@@ -1,9 +1,9 @@
-use crate::error::StorageError;
+use crate::error::CodecError;
 use crc32fast::hash;
 
 const MAGIC: &[u8; 4] = b"RIVT";
 const VERSION: u8 = 1;
-const HEADER_LENGTH: usize = 30;
+pub(super) const HEADER_LENGTH: usize = 30;
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct RecordLimits {
@@ -60,7 +60,7 @@ impl Record {
         self.payload.as_ref()
     }
 
-    fn check_len(len: usize, max: u32, error: StorageError) -> Result<u32, StorageError> {
+    fn check_len(len: usize, max: u32, error: CodecError) -> Result<u32, CodecError> {
         match u32::try_from(len) {
             Ok(l) => {
                 if l > max {
@@ -68,8 +68,65 @@ impl Record {
                 }
                 Ok(l)
             }
-            Err(_) => Err(StorageError::LengthOverflow),
+            Err(_) => Err(CodecError::LengthOverflow),
         }
+    }
+
+    pub(super) fn encoded_record_len(
+        header: &[u8],
+        limits: &RecordLimits,
+    ) -> Result<usize, CodecError> {
+        if header.len() < HEADER_LENGTH {
+            return Err(CodecError::IncompleteHeader);
+        }
+
+        if header[0..4] != MAGIC[..] {
+            return Err(CodecError::InvalidMagic);
+        }
+
+        if header[4] != VERSION {
+            return Err(CodecError::UnsupportedVersion);
+        }
+
+        let key_present = header[21];
+        let key_length_bytes: [u8; 4] = header[22..26]
+            .try_into()
+            .expect("header checked; key length slice is exactly four bytes");
+        let payload_length_bytes: [u8; 4] = header[26..30]
+            .try_into()
+            .expect("header checked; payload length slice is exactly four bytes");
+
+        let key_length = u32::from_be_bytes(key_length_bytes);
+        let payload_length = u32::from_be_bytes(payload_length_bytes);
+
+        if key_present != 0 && key_present != 1 {
+            return Err(CodecError::InvalidKeyPresence);
+        }
+
+        if key_present == 0 && key_length > 0 {
+            return Err(CodecError::InvalidKeyLength);
+        }
+
+        if key_length > limits.max_key_bytes {
+            return Err(CodecError::KeyTooLarge);
+        }
+
+        if payload_length > limits.max_payload_bytes {
+            return Err(CodecError::PayloadTooLarge);
+        }
+
+        let key_len = usize::try_from(key_length).map_err(|_| CodecError::LengthOverflow)?;
+
+        let payload_len =
+            usize::try_from(payload_length).map_err(|_| CodecError::LengthOverflow)?;
+
+        let total_len = HEADER_LENGTH
+            .checked_add(key_len)
+            .and_then(|len| len.checked_add(payload_len))
+            .and_then(|len| len.checked_add(4)) // CRC32 checksum
+            .ok_or(CodecError::LengthOverflow)?;
+
+        Ok(total_len)
     }
 
     // Record format v1 (all integers big-endian):
@@ -87,14 +144,14 @@ impl Record {
     // CRC32 covers version through payload, excluding magic and checksum.
     // Slice ranges exclude the ending index.
 
-    pub fn encode(&self, limits: &RecordLimits) -> Result<Vec<u8>, StorageError> {
+    pub fn encode(&self, limits: &RecordLimits) -> Result<Vec<u8>, CodecError> {
         let key_present = self.key().map_or(0, |_| 1);
         let key_len = self.key().as_ref().map_or(0, |key| key.len());
-        let key_length = Self::check_len(key_len, limits.max_key_bytes, StorageError::KeyTooLarge)?;
+        let key_length = Self::check_len(key_len, limits.max_key_bytes, CodecError::KeyTooLarge)?;
         let payload_length = Self::check_len(
             self.payload().len(),
             limits.max_payload_bytes,
-            StorageError::PayloadTooLarge,
+            CodecError::PayloadTooLarge,
         )?;
         let mut bytes: Vec<u8> = Vec::new();
 
@@ -117,18 +174,8 @@ impl Record {
         Ok(bytes)
     }
 
-    pub fn decode(bytes: &[u8], limits: &RecordLimits) -> Result<(Self, usize), StorageError> {
-        if bytes.len() < HEADER_LENGTH {
-            return Err(StorageError::IncompleteHeader);
-        }
-
-        if &bytes[0..4] != MAGIC {
-            return Err(StorageError::InvalidMagic);
-        }
-
-        if bytes[4] != VERSION {
-            return Err(StorageError::UnsupportedVersion);
-        }
+    pub fn decode(bytes: &[u8], limits: &RecordLimits) -> Result<(Self, usize), CodecError> {
+        let record_end = Self::encoded_record_len(bytes, limits)?;
 
         let offset_bytes: [u8; 8] = bytes[5..13]
             .try_into()
@@ -142,60 +189,24 @@ impl Record {
             .try_into()
             .expect("header checked; key length slice is exactly four bytes");
 
-        let payload_length_bytes: [u8; 4] = bytes[26..30]
-            .try_into()
-            .expect("header checked; payload length slice is exactly four bytes");
+        let key_length = u32::from_be_bytes(key_length_bytes);
+
+        let key_len = usize::try_from(key_length).map_err(|_| CodecError::LengthOverflow)?;
 
         let key_present = bytes[21];
         let offset = u64::from_be_bytes(offset_bytes);
         let timestamp = u64::from_be_bytes(timestamp_bytes);
-        let key_length = u32::from_be_bytes(key_length_bytes);
-        let payload_length = u32::from_be_bytes(payload_length_bytes);
-
-        if key_present != 0 && key_present != 1 {
-            return Err(StorageError::InvalidKeyPresence);
-        }
-
-        if key_present == 0 && key_length > 0 {
-            return Err(StorageError::InvalidKeyLength);
-        }
-
-        if key_length > limits.max_key_bytes {
-            return Err(StorageError::KeyTooLarge);
-        }
-
-        if payload_length > limits.max_payload_bytes {
-            return Err(StorageError::PayloadTooLarge);
-        }
-
-        let key_len = match usize::try_from(key_length) {
-            Ok(len) => len,
-            Err(_) => return Err(StorageError::LengthOverflow),
-        };
-
-        let payload_len = match usize::try_from(payload_length) {
-            Ok(len) => len,
-            Err(_) => return Err(StorageError::LengthOverflow),
-        };
 
         let key_end = match HEADER_LENGTH.checked_add(key_len) {
             Some(end) => end,
-            None => return Err(StorageError::LengthOverflow),
-        };
-
-        let payload_end = match key_end.checked_add(payload_len) {
-            Some(end) => end,
-            None => return Err(StorageError::LengthOverflow),
-        };
-
-        let record_end = match payload_end.checked_add(4) {
-            Some(end) => end,
-            None => return Err(StorageError::LengthOverflow),
+            None => return Err(CodecError::LengthOverflow),
         };
 
         if bytes.len() < record_end {
-            return Err(StorageError::IncompleteBody);
+            return Err(CodecError::IncompleteBody);
         }
+
+        let payload_end = record_end - 4;
 
         let checksum_bytes: [u8; 4] = bytes[payload_end..record_end]
             .try_into()
@@ -205,7 +216,7 @@ impl Record {
         let computed_checksum = hash(&bytes[4..payload_end]);
 
         if checksum != computed_checksum {
-            return Err(StorageError::InvalidChecksum);
+            return Err(CodecError::InvalidChecksum);
         }
 
         let key = if key_present == 1 {
@@ -248,11 +259,16 @@ impl PublishInput {
 #[cfg(test)]
 mod tests {
     use crate::{
-        error::StorageError,
+        error::CodecError,
         storage::record::{HEADER_LENGTH, RecordLimits},
     };
 
     use super::{PublishInput, Record};
+
+    mod common {
+        include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/common/mod.rs"));
+    }
+    use common::{record_with_fields, sample_record};
 
     #[test]
     fn record_constructor_preserves_all_fields() {
@@ -263,12 +279,28 @@ mod tests {
         let payload: Vec<u8> = vec![1, 2, 3];
         let expected_payload: &[u8] = &[1, 2, 3];
 
-        let record = Record::new(offset, timestamp, key, payload);
+        let record = record_with_fields(offset, timestamp, key, payload);
 
-        assert_eq!(record.offset(), offset);
-        assert_eq!(record.timestamp(), timestamp);
-        assert_eq!(record.key(), expected_key);
-        assert_eq!(record.payload(), expected_payload);
+        assert_eq!(
+            record.offset(),
+            offset,
+            "record constructor preserves all fields: offset should match the expected value"
+        );
+        assert_eq!(
+            record.timestamp(),
+            timestamp,
+            "record constructor preserves all fields: timestamp should match the expected value"
+        );
+        assert_eq!(
+            record.key(),
+            expected_key,
+            "record constructor preserves all fields: key should match the expected value"
+        );
+        assert_eq!(
+            record.payload(),
+            expected_payload,
+            "record constructor preserves all fields: payload should match the expected value"
+        );
     }
 
     #[test]
@@ -280,12 +312,28 @@ mod tests {
         let payload: Vec<u8> = vec![1, 2, 3];
         let expected_payload: &[u8] = &[1, 2, 3];
 
-        let record = Record::new(offset, timestamp, key, payload);
+        let record = record_with_fields(offset, timestamp, key, payload);
 
-        assert_eq!(record.offset(), offset);
-        assert_eq!(record.timestamp(), timestamp);
-        assert_eq!(record.key(), expected_key);
-        assert_eq!(record.payload(), expected_payload);
+        assert_eq!(
+            record.offset(),
+            offset,
+            "record absent key is preserved: offset should match the expected value"
+        );
+        assert_eq!(
+            record.timestamp(),
+            timestamp,
+            "record absent key is preserved: timestamp should match the expected value"
+        );
+        assert_eq!(
+            record.key(),
+            expected_key,
+            "record absent key is preserved: key should match the expected value"
+        );
+        assert_eq!(
+            record.payload(),
+            expected_payload,
+            "record absent key is preserved: payload should match the expected value"
+        );
     }
 
     #[test]
@@ -297,12 +345,28 @@ mod tests {
         let payload: Vec<u8> = vec![1, 2, 3];
         let expected_payload: &[u8] = &[1, 2, 3];
 
-        let record = Record::new(offset, timestamp, key, payload);
+        let record = record_with_fields(offset, timestamp, key, payload);
 
-        assert_eq!(record.offset(), offset);
-        assert_eq!(record.timestamp(), timestamp);
-        assert_eq!(record.key(), expected_key);
-        assert_eq!(record.payload(), expected_payload);
+        assert_eq!(
+            record.offset(),
+            offset,
+            "record empty key is preserved: offset should match the expected value"
+        );
+        assert_eq!(
+            record.timestamp(),
+            timestamp,
+            "record empty key is preserved: timestamp should match the expected value"
+        );
+        assert_eq!(
+            record.key(),
+            expected_key,
+            "record empty key is preserved: key should match the expected value"
+        );
+        assert_eq!(
+            record.payload(),
+            expected_payload,
+            "record empty key is preserved: payload should match the expected value"
+        );
     }
 
     #[test]
@@ -314,12 +378,28 @@ mod tests {
         let payload: Vec<u8> = vec![];
         let expected_payload: &[u8] = &[];
 
-        let record = Record::new(offset, timestamp, key, payload);
+        let record = record_with_fields(offset, timestamp, key, payload);
 
-        assert_eq!(record.offset(), offset);
-        assert_eq!(record.timestamp(), timestamp);
-        assert_eq!(record.key(), expected_key);
-        assert_eq!(record.payload(), expected_payload);
+        assert_eq!(
+            record.offset(),
+            offset,
+            "record empty payload is preserved: offset should match the expected value"
+        );
+        assert_eq!(
+            record.timestamp(),
+            timestamp,
+            "record empty payload is preserved: timestamp should match the expected value"
+        );
+        assert_eq!(
+            record.key(),
+            expected_key,
+            "record empty payload is preserved: key should match the expected value"
+        );
+        assert_eq!(
+            record.payload(),
+            expected_payload,
+            "record empty payload is preserved: payload should match the expected value"
+        );
     }
 
     #[test]
@@ -331,12 +411,28 @@ mod tests {
         let payload: Vec<u8> = vec![0xFF, 0xFE, 0x00];
         let expected_payload: &[u8] = &[0xFF, 0xFE, 0x00];
 
-        let record = Record::new(offset, timestamp, key, payload);
+        let record = record_with_fields(offset, timestamp, key, payload);
 
-        assert_eq!(record.offset(), offset);
-        assert_eq!(record.timestamp(), timestamp);
-        assert_eq!(record.key(), expected_key);
-        assert_eq!(record.payload(), expected_payload);
+        assert_eq!(
+            record.offset(),
+            offset,
+            "record non utf8 bytes are preserved: offset should match the expected value"
+        );
+        assert_eq!(
+            record.timestamp(),
+            timestamp,
+            "record non utf8 bytes are preserved: timestamp should match the expected value"
+        );
+        assert_eq!(
+            record.key(),
+            expected_key,
+            "record non utf8 bytes are preserved: key should match the expected value"
+        );
+        assert_eq!(
+            record.payload(),
+            expected_payload,
+            "record non utf8 bytes are preserved: payload should match the expected value"
+        );
     }
 
     #[test]
@@ -348,12 +444,28 @@ mod tests {
         let payload: Vec<u8> = vec![1, 2, 3];
         let expected_payload: &[u8] = &[1, 2, 3];
 
-        let record = Record::new(offset, timestamp, key, payload);
+        let record = record_with_fields(offset, timestamp, key, payload);
 
-        assert_eq!(record.offset(), offset);
-        assert_eq!(record.timestamp(), timestamp);
-        assert_eq!(record.key(), expected_key);
-        assert_eq!(record.payload(), expected_payload);
+        assert_eq!(
+            record.offset(),
+            offset,
+            "record integer boundaries are preserved zero: offset should match the expected value"
+        );
+        assert_eq!(
+            record.timestamp(),
+            timestamp,
+            "record integer boundaries are preserved zero: timestamp should match the expected value"
+        );
+        assert_eq!(
+            record.key(),
+            expected_key,
+            "record integer boundaries are preserved zero: key should match the expected value"
+        );
+        assert_eq!(
+            record.payload(),
+            expected_payload,
+            "record integer boundaries are preserved zero: payload should match the expected value"
+        );
     }
 
     #[test]
@@ -365,12 +477,28 @@ mod tests {
         let payload: Vec<u8> = vec![1, 2, 3];
         let expected_payload: &[u8] = &[1, 2, 3];
 
-        let record = Record::new(offset, timestamp, key, payload);
+        let record = record_with_fields(offset, timestamp, key, payload);
 
-        assert_eq!(record.offset(), offset);
-        assert_eq!(record.timestamp(), timestamp);
-        assert_eq!(record.key(), expected_key);
-        assert_eq!(record.payload(), expected_payload);
+        assert_eq!(
+            record.offset(),
+            offset,
+            "record integer boundaries are preserved max: offset should match the expected value"
+        );
+        assert_eq!(
+            record.timestamp(),
+            timestamp,
+            "record integer boundaries are preserved max: timestamp should match the expected value"
+        );
+        assert_eq!(
+            record.key(),
+            expected_key,
+            "record integer boundaries are preserved max: key should match the expected value"
+        );
+        assert_eq!(
+            record.payload(),
+            expected_payload,
+            "record integer boundaries are preserved max: payload should match the expected value"
+        );
     }
 
     #[test]
@@ -382,10 +510,10 @@ mod tests {
         let payload1: Vec<u8> = vec![1, 2, 3];
         let payload2: Vec<u8> = vec![1, 2, 3];
 
-        let record1 = Record::new(offset, timestamp, key1, payload1);
-        let record2 = Record::new(offset, timestamp, key2, payload2);
+        let record1 = record_with_fields(offset, timestamp, key1, payload1);
+        let record2 = record_with_fields(offset, timestamp, key2, payload2);
 
-        assert_eq!(record1, record2);
+        assert_eq!(record1, record2, "identical fields should compare equal");
     }
 
     #[test]
@@ -398,10 +526,13 @@ mod tests {
         let payload1: Vec<u8> = vec![1, 2, 3];
         let payload2: Vec<u8> = vec![1, 2, 3];
 
-        let record1 = Record::new(offset1, timestamp, key1, payload1);
-        let record2 = Record::new(offset2, timestamp, key2, payload2);
+        let record1 = record_with_fields(offset1, timestamp, key1, payload1);
+        let record2 = record_with_fields(offset2, timestamp, key2, payload2);
 
-        assert_ne!(record1, record2);
+        assert_ne!(
+            record1, record2,
+            "records with different offsets should compare unequal"
+        );
     }
 
     #[test]
@@ -414,10 +545,13 @@ mod tests {
         let payload1: Vec<u8> = vec![1, 2, 3];
         let payload2: Vec<u8> = vec![1, 2, 3];
 
-        let record1 = Record::new(offset, timestamp1, key1, payload1);
-        let record2 = Record::new(offset, timestamp2, key2, payload2);
+        let record1 = record_with_fields(offset, timestamp1, key1, payload1);
+        let record2 = record_with_fields(offset, timestamp2, key2, payload2);
 
-        assert_ne!(record1, record2);
+        assert_ne!(
+            record1, record2,
+            "records with different timestamps should compare unequal"
+        );
     }
 
     #[test]
@@ -429,10 +563,13 @@ mod tests {
         let payload1: Vec<u8> = vec![1, 2, 3];
         let payload2: Vec<u8> = vec![1, 2, 3];
 
-        let record1 = Record::new(offset, timestamp, key1, payload1);
-        let record2 = Record::new(offset, timestamp, key2, payload2);
+        let record1 = record_with_fields(offset, timestamp, key1, payload1);
+        let record2 = record_with_fields(offset, timestamp, key2, payload2);
 
-        assert_ne!(record1, record2);
+        assert_ne!(
+            record1, record2,
+            "records with different keys should compare unequal"
+        );
     }
 
     #[test]
@@ -444,10 +581,13 @@ mod tests {
         let payload1: Vec<u8> = vec![1, 2, 3];
         let payload2: Vec<u8> = vec![2, 3, 4];
 
-        let record1 = Record::new(offset, timestamp, key1, payload1);
-        let record2 = Record::new(offset, timestamp, key2, payload2);
+        let record1 = record_with_fields(offset, timestamp, key1, payload1);
+        let record2 = record_with_fields(offset, timestamp, key2, payload2);
 
-        assert_ne!(record1, record2);
+        assert_ne!(
+            record1, record2,
+            "records with different payloads should compare unequal"
+        );
     }
 
     #[test]
@@ -459,10 +599,13 @@ mod tests {
         let payload1: Vec<u8> = vec![1, 2, 3];
         let payload2: Vec<u8> = vec![1, 2, 3];
 
-        let record1 = Record::new(offset, timestamp, key1, payload1);
-        let record2 = Record::new(offset, timestamp, key2, payload2);
+        let record1 = record_with_fields(offset, timestamp, key1, payload1);
+        let record2 = record_with_fields(offset, timestamp, key2, payload2);
 
-        assert_ne!(record1, record2);
+        assert_ne!(
+            record1, record2,
+            "records with absent and empty keys should compare unequal"
+        );
     }
 
     #[test]
@@ -474,8 +617,16 @@ mod tests {
 
         let input = PublishInput::new(key, payload);
 
-        assert_eq!(input.key(), expected_key);
-        assert_eq!(input.payload(), expected_payload);
+        assert_eq!(
+            input.key(),
+            expected_key,
+            "publish input constructor preserves all fields: key should match the expected value"
+        );
+        assert_eq!(
+            input.payload(),
+            expected_payload,
+            "publish input constructor preserves all fields: payload should match the expected value"
+        );
     }
 
     #[test]
@@ -487,8 +638,16 @@ mod tests {
 
         let input = PublishInput::new(key, payload);
 
-        assert_eq!(input.key(), expected_key);
-        assert_eq!(input.payload(), expected_payload);
+        assert_eq!(
+            input.key(),
+            expected_key,
+            "publish input absent key is preserved: key should match the expected value"
+        );
+        assert_eq!(
+            input.payload(),
+            expected_payload,
+            "publish input absent key is preserved: payload should match the expected value"
+        );
     }
 
     #[test]
@@ -500,8 +659,16 @@ mod tests {
 
         let input = PublishInput::new(key, payload);
 
-        assert_eq!(input.key(), expected_key);
-        assert_eq!(input.payload(), expected_payload);
+        assert_eq!(
+            input.key(),
+            expected_key,
+            "publish input empty key is preserved: key should match the expected value"
+        );
+        assert_eq!(
+            input.payload(),
+            expected_payload,
+            "publish input empty key is preserved: payload should match the expected value"
+        );
     }
 
     #[test]
@@ -513,8 +680,16 @@ mod tests {
 
         let input = PublishInput::new(key, payload);
 
-        assert_eq!(input.key(), expected_key);
-        assert_eq!(input.payload(), expected_payload);
+        assert_eq!(
+            input.key(),
+            expected_key,
+            "publish input empty payload is preserved: key should match the expected value"
+        );
+        assert_eq!(
+            input.payload(),
+            expected_payload,
+            "publish input empty payload is preserved: payload should match the expected value"
+        );
     }
 
     #[test]
@@ -526,8 +701,16 @@ mod tests {
 
         let input = PublishInput::new(key, payload);
 
-        assert_eq!(input.key(), expected_key);
-        assert_eq!(input.payload(), expected_payload);
+        assert_eq!(
+            input.key(),
+            expected_key,
+            "publish input non utf8 bytes are preserved: key should match the expected value"
+        );
+        assert_eq!(
+            input.payload(),
+            expected_payload,
+            "publish input non utf8 bytes are preserved: payload should match the expected value"
+        );
     }
 
     #[test]
@@ -540,7 +723,7 @@ mod tests {
         let input1 = PublishInput::new(key1, payload1);
         let input2 = PublishInput::new(key2, payload2);
 
-        assert_eq!(input1, input2);
+        assert_eq!(input1, input2, "identical fields should compare equal");
     }
 
     #[test]
@@ -553,7 +736,10 @@ mod tests {
         let input1 = PublishInput::new(key1, payload1);
         let input2 = PublishInput::new(key2, payload2);
 
-        assert_ne!(input1, input2);
+        assert_ne!(
+            input1, input2,
+            "publish inputs with different keys should compare unequal"
+        );
     }
 
     #[test]
@@ -566,7 +752,10 @@ mod tests {
         let input1 = PublishInput::new(key1, payload1);
         let input2 = PublishInput::new(key2, payload2);
 
-        assert_ne!(input1, input2);
+        assert_ne!(
+            input1, input2,
+            "publish inputs with different payloads should compare unequal"
+        );
     }
 
     #[test]
@@ -579,7 +768,10 @@ mod tests {
         let input1 = PublishInput::new(key1, payload1);
         let input2 = PublishInput::new(key2, payload2);
 
-        assert_ne!(input1, input2);
+        assert_ne!(
+            input1, input2,
+            "publish inputs with absent and empty keys should compare unequal"
+        );
     }
 
     // Codec exercises: replace todo!() as each test is implemented.
@@ -594,7 +786,7 @@ mod tests {
         let expected_payload: &[u8] = &[1, 2, 3];
         let limits = RecordLimits::default();
 
-        let record = Record::new(offset, timestamp, key, payload);
+        let record = record_with_fields(offset, timestamp, key, payload);
 
         let bytes = record
             .encode(&limits)
@@ -603,16 +795,35 @@ mod tests {
         let (record_from_bytes, _) =
             Record::decode(&bytes, &limits).expect("record should decode successfully");
 
-        assert_eq!(record, record_from_bytes);
-        assert_eq!(record_from_bytes.offset(), offset);
-        assert_eq!(record_from_bytes.timestamp(), timestamp);
-        assert_eq!(record_from_bytes.key(), expected_key);
-        assert_eq!(record_from_bytes.payload(), expected_payload);
+        assert_eq!(
+            record, record_from_bytes,
+            "decoded record should match its corresponding original record"
+        );
+        assert_eq!(
+            record_from_bytes.offset(),
+            offset,
+            "codec round trip preserves record: offset should match the expected value"
+        );
+        assert_eq!(
+            record_from_bytes.timestamp(),
+            timestamp,
+            "codec round trip preserves record: timestamp should match the expected value"
+        );
+        assert_eq!(
+            record_from_bytes.key(),
+            expected_key,
+            "codec round trip preserves record: key should match the expected value"
+        );
+        assert_eq!(
+            record_from_bytes.payload(),
+            expected_payload,
+            "codec round trip preserves record: payload should match the expected value"
+        );
     }
 
     #[test]
     fn codec_encoding_matches_golden_bytes() {
-        let record = Record::new(
+        let record = record_with_fields(
             0x0102030405060708,
             0x1112131415161718,
             Some(vec![0xAA, 0xBB]),
@@ -638,18 +849,17 @@ mod tests {
             .encode(&limits)
             .expect("record should encode successfully");
 
-        assert_eq!(bytes, expected_bytes);
+        assert_eq!(
+            bytes, expected_bytes,
+            "encoding should match the specified version 1 wire format exactly"
+        );
     }
 
     #[test]
     fn codec_encoding_is_deterministic() {
-        let offset: u64 = 0;
-        let timestamp: u64 = 1_700_000_000;
-        let key: Option<Vec<u8>> = Some(vec![10, 20, 30]);
-        let payload: Vec<u8> = vec![1, 2, 3];
         let limits = RecordLimits::default();
 
-        let record = Record::new(offset, timestamp, key, payload);
+        let record = sample_record(0);
 
         let bytes1 = record
             .encode(&limits)
@@ -659,7 +869,10 @@ mod tests {
             .encode(&limits)
             .expect("record should encode successfully");
 
-        assert_eq!(bytes1, bytes2);
+        assert_eq!(
+            bytes1, bytes2,
+            "encoding the same record twice should produce identical bytes"
+        );
     }
 
     #[test]
@@ -669,7 +882,7 @@ mod tests {
         let key: Option<Vec<u8>> = None;
         let payload: Vec<u8> = vec![1, 2, 3];
         let limits = RecordLimits::default();
-        let record = Record::new(offset, timestamp, key, payload);
+        let record = record_with_fields(offset, timestamp, key, payload);
 
         let bytes = record
             .encode(&limits)
@@ -678,8 +891,15 @@ mod tests {
         let (record_from_bytes, _) =
             Record::decode(&bytes, &limits).expect("record should decode successfully");
 
-        assert_eq!(key_present, 0);
-        assert_eq!(record_from_bytes.key(), None);
+        assert_eq!(
+            key_present, 0,
+            "key presence flag should distinguish an absent key from a present empty key"
+        );
+        assert_eq!(
+            record_from_bytes.key(),
+            None,
+            "codec round trip preserves absent key: key should match the expected value"
+        );
     }
 
     #[test]
@@ -689,7 +909,7 @@ mod tests {
         let key: Option<Vec<u8>> = Some(vec![]);
         let payload: Vec<u8> = vec![1, 2, 3];
         let limits = RecordLimits::default();
-        let record = Record::new(offset, timestamp, key, payload);
+        let record = record_with_fields(offset, timestamp, key, payload);
 
         let bytes = record
             .encode(&limits)
@@ -698,8 +918,15 @@ mod tests {
         let (record_from_bytes, _) =
             Record::decode(&bytes, &limits).expect("record should decode successfully");
 
-        assert_eq!(key_present, 1);
-        assert_eq!(record_from_bytes.key(), Some(vec![]).as_deref());
+        assert_eq!(
+            key_present, 1,
+            "key presence flag should distinguish an absent key from a present empty key"
+        );
+        assert_eq!(
+            record_from_bytes.key(),
+            Some(vec![]).as_deref(),
+            "codec round trip preserves empty key: key should match the expected value"
+        );
     }
 
     #[test]
@@ -709,7 +936,7 @@ mod tests {
         let key: Option<Vec<u8>> = Some(vec![]);
         let payload: Vec<u8> = vec![];
         let limits = RecordLimits::default();
-        let record = Record::new(offset, timestamp, key, payload);
+        let record = record_with_fields(offset, timestamp, key, payload);
 
         let bytes = record
             .encode(&limits)
@@ -717,8 +944,16 @@ mod tests {
         let (record_from_bytes, consumed) =
             Record::decode(&bytes, &limits).expect("record should decode successfully");
 
-        assert_eq!(record_from_bytes.payload(), &[]);
-        assert_eq!(consumed, bytes.len());
+        assert_eq!(
+            record_from_bytes.payload(),
+            &[],
+            "codec round trip preserves empty payload: payload should match the expected value"
+        );
+        assert_eq!(
+            consumed,
+            bytes.len(),
+            "decoder should consume exactly the encoded record bytes"
+        );
     }
 
     #[test]
@@ -728,7 +963,7 @@ mod tests {
         let key: Option<Vec<u8>> = Some(vec![]);
         let payload: Vec<u8> = vec![0x00, 0x80, 0xFF];
         let limits = RecordLimits::default();
-        let record = Record::new(offset, timestamp, key, payload);
+        let record = record_with_fields(offset, timestamp, key, payload);
 
         let bytes = record
             .encode(&limits)
@@ -736,7 +971,11 @@ mod tests {
         let (record_from_bytes, _) =
             Record::decode(&bytes, &limits).expect("record should decode successfully");
 
-        assert_eq!(record_from_bytes.payload(), &[0x00, 0x80, 0xFF]);
+        assert_eq!(
+            record_from_bytes.payload(),
+            &[0x00, 0x80, 0xFF],
+            "codec round trip preserves binary bytes: payload should match the expected value"
+        );
     }
 
     #[test]
@@ -746,7 +985,7 @@ mod tests {
         let key: Option<Vec<u8>> = Some(vec![]);
         let payload: Vec<u8> = vec![];
         let limits = RecordLimits::default();
-        let record = Record::new(offset, timestamp, key, payload);
+        let record = record_with_fields(offset, timestamp, key, payload);
 
         let bytes = record
             .encode(&limits)
@@ -754,8 +993,16 @@ mod tests {
         let (record_from_bytes, _) =
             Record::decode(&bytes, &limits).expect("record should decode successfully");
 
-        assert_eq!(record_from_bytes.offset(), 0);
-        assert_eq!(record_from_bytes.timestamp(), 0);
+        assert_eq!(
+            record_from_bytes.offset(),
+            0,
+            "codec round trip preserves integer boundaries zero: offset should match the expected value"
+        );
+        assert_eq!(
+            record_from_bytes.timestamp(),
+            0,
+            "codec round trip preserves integer boundaries zero: timestamp should match the expected value"
+        );
     }
 
     #[test]
@@ -765,7 +1012,7 @@ mod tests {
         let key: Option<Vec<u8>> = Some(vec![]);
         let payload: Vec<u8> = vec![];
         let limits = RecordLimits::default();
-        let record = Record::new(offset, timestamp, key, payload);
+        let record = record_with_fields(offset, timestamp, key, payload);
 
         let bytes = record
             .encode(&limits)
@@ -773,8 +1020,16 @@ mod tests {
         let (record_from_bytes, _) =
             Record::decode(&bytes, &limits).expect("record should decode successfully");
 
-        assert_eq!(record_from_bytes.offset(), u64::MAX);
-        assert_eq!(record_from_bytes.timestamp(), u64::MAX);
+        assert_eq!(
+            record_from_bytes.offset(),
+            u64::MAX,
+            "codec round trip preserves integer boundaries max: offset should match the expected value"
+        );
+        assert_eq!(
+            record_from_bytes.timestamp(),
+            u64::MAX,
+            "codec round trip preserves integer boundaries max: timestamp should match the expected value"
+        );
     }
 
     #[test]
@@ -783,14 +1038,14 @@ mod tests {
         let timestamp1: u64 = 0;
         let key1: Option<Vec<u8>> = Some(vec![]);
         let payload1: Vec<u8> = vec![];
-        let record1 = Record::new(offset1, timestamp1, key1, payload1);
+        let record1 = record_with_fields(offset1, timestamp1, key1, payload1);
 
         let offset2: u64 = u64::MAX;
         let timestamp2: u64 = u64::MAX;
         let key2: Option<Vec<u8>> = Some(vec![]);
         let payload2: Vec<u8> = vec![];
         let limits = RecordLimits::default();
-        let record2 = Record::new(offset2, timestamp2, key2, payload2);
+        let record2 = record_with_fields(offset2, timestamp2, key2, payload2);
 
         let bytes1 = record1
             .encode(&limits)
@@ -808,9 +1063,19 @@ mod tests {
         let (record_from_bytes2, consumed2) = Record::decode(&combined[consumed1..], &limits)
             .expect("second record should decode successfully");
 
-        assert_eq!(record_from_bytes1, record1);
-        assert_eq!(record_from_bytes2, record2);
-        assert_eq!(consumed1 + consumed2, combined.len());
+        assert_eq!(
+            record_from_bytes1, record1,
+            "decoded record should match its corresponding original record"
+        );
+        assert_eq!(
+            record_from_bytes2, record2,
+            "decoded record should match its corresponding original record"
+        );
+        assert_eq!(
+            consumed1 + consumed2,
+            combined.len(),
+            "decoder should consume exactly the encoded record bytes"
+        );
     }
 
     #[test]
@@ -820,7 +1085,7 @@ mod tests {
         let key: Option<Vec<u8>> = Some(vec![]);
         let payload: Vec<u8> = vec![];
         let limits = RecordLimits::default();
-        let record = Record::new(offset, timestamp, key, payload);
+        let record = record_with_fields(offset, timestamp, key, payload);
 
         let bytes = record
             .encode(&limits)
@@ -829,7 +1094,11 @@ mod tests {
         for n in 0..30 {
             let truncated = &bytes[0..n];
             let result = Record::decode(truncated, &limits);
-            assert_eq!(result, Err(StorageError::IncompleteHeader));
+            assert_eq!(
+                result,
+                Err(CodecError::IncompleteHeader),
+                "codec decode rejects every truncated prefix header: expected IncompleteHeader for prefix length {n}"
+            );
         }
     }
 
@@ -840,7 +1109,7 @@ mod tests {
         let key: Option<Vec<u8>> = Some(vec![1, 2, 3]);
         let payload: Vec<u8> = vec![1, 2, 3];
         let limits = RecordLimits::default();
-        let record = Record::new(offset, timestamp, key, payload);
+        let record = record_with_fields(offset, timestamp, key, payload);
 
         let bytes = record
             .encode(&limits)
@@ -851,7 +1120,11 @@ mod tests {
         for n in 30..(bytes.len() - 4) {
             let truncated = &bytes[0..n];
             let result = Record::decode(truncated, &limits);
-            assert_eq!(result, Err(StorageError::IncompleteBody));
+            assert_eq!(
+                result,
+                Err(CodecError::IncompleteBody),
+                "codec decode rejects every truncated prefix body: expected IncompleteBody for prefix length {n}"
+            );
             count += 1;
         }
 
@@ -868,7 +1141,7 @@ mod tests {
         let key: Option<Vec<u8>> = Some(vec![]);
         let payload: Vec<u8> = vec![];
         let limits = RecordLimits::default();
-        let record = Record::new(offset, timestamp, key, payload);
+        let record = record_with_fields(offset, timestamp, key, payload);
 
         let bytes = record
             .encode(&limits)
@@ -877,7 +1150,11 @@ mod tests {
         for n in (bytes.len() - 4)..bytes.len() {
             let truncated = &bytes[0..n];
             let result = Record::decode(truncated, &limits);
-            assert_eq!(result, Err(StorageError::IncompleteBody));
+            assert_eq!(
+                result,
+                Err(CodecError::IncompleteBody),
+                "codec decode rejects every truncated prefix checksum: expected IncompleteBody for prefix length {n}"
+            );
         }
     }
 
@@ -888,7 +1165,7 @@ mod tests {
         let key: Option<Vec<u8>> = Some(vec![]);
         let payload: Vec<u8> = vec![];
         let limits = RecordLimits::default();
-        let record = Record::new(offset, timestamp, key, payload);
+        let record = record_with_fields(offset, timestamp, key, payload);
 
         let mut bytes = record
             .encode(&limits)
@@ -897,7 +1174,11 @@ mod tests {
         bytes[0] = 0;
 
         let result = Record::decode(&bytes, &limits);
-        assert_eq!(result, Err(StorageError::InvalidMagic));
+        assert_eq!(
+            result,
+            Err(CodecError::InvalidMagic),
+            "codec decode rejects invalid magic: expected InvalidMagic"
+        );
     }
 
     #[test]
@@ -907,7 +1188,7 @@ mod tests {
         let key: Option<Vec<u8>> = Some(vec![]);
         let payload: Vec<u8> = vec![];
         let limits = RecordLimits::default();
-        let record = Record::new(offset, timestamp, key, payload);
+        let record = record_with_fields(offset, timestamp, key, payload);
 
         let mut bytes = record
             .encode(&limits)
@@ -916,7 +1197,11 @@ mod tests {
         bytes[4] = 0xFF;
 
         let result = Record::decode(&bytes, &limits);
-        assert_eq!(result, Err(StorageError::UnsupportedVersion));
+        assert_eq!(
+            result,
+            Err(CodecError::UnsupportedVersion),
+            "codec decode rejects unsupported version: expected UnsupportedVersion"
+        );
     }
 
     #[test]
@@ -926,7 +1211,7 @@ mod tests {
         let key: Option<Vec<u8>> = Some(vec![]);
         let payload: Vec<u8> = vec![];
         let limits = RecordLimits::default();
-        let record = Record::new(offset, timestamp, key, payload);
+        let record = record_with_fields(offset, timestamp, key, payload);
 
         let mut bytes = record
             .encode(&limits)
@@ -935,7 +1220,11 @@ mod tests {
         for n in 2..=255 {
             bytes[21] = n;
             let result = Record::decode(&bytes, &limits);
-            assert_eq!(result, Err(StorageError::InvalidKeyPresence));
+            assert_eq!(
+                result,
+                Err(CodecError::InvalidKeyPresence),
+                "codec decode rejects invalid key presence: expected InvalidKeyPresence for flag {n}"
+            );
         }
     }
 
@@ -946,7 +1235,7 @@ mod tests {
         let key: Option<Vec<u8>> = Some(vec![1, 2, 3]);
         let payload: Vec<u8> = vec![];
         let limits = RecordLimits::default();
-        let record = Record::new(offset, timestamp, key, payload);
+        let record = record_with_fields(offset, timestamp, key, payload);
 
         let mut bytes = record
             .encode(&limits)
@@ -955,7 +1244,11 @@ mod tests {
         bytes[21] = 0;
 
         let result = Record::decode(&bytes, &limits);
-        assert_eq!(result, Err(StorageError::InvalidKeyLength));
+        assert_eq!(
+            result,
+            Err(CodecError::InvalidKeyLength),
+            "codec decode rejects absent key with nonzero length: expected InvalidKeyLength"
+        );
     }
 
     #[test]
@@ -965,7 +1258,7 @@ mod tests {
         let key: Option<Vec<u8>> = Some(vec![1, 2]);
         let payload: Vec<u8> = vec![1, 2, 3];
         let limits = RecordLimits::new(2, 3);
-        let record = Record::new(offset, timestamp, key, payload);
+        let record = record_with_fields(offset, timestamp, key, payload);
 
         let bytes = record
             .encode(&limits)
@@ -974,7 +1267,10 @@ mod tests {
         let (record_from_bytes, _) =
             Record::decode(&bytes, &limits).expect("record should decode successfully");
 
-        assert_eq!(record, record_from_bytes);
+        assert_eq!(
+            record, record_from_bytes,
+            "decoded record should match its corresponding original record"
+        );
     }
 
     #[test]
@@ -984,11 +1280,15 @@ mod tests {
         let key: Option<Vec<u8>> = Some(vec![1, 2, 3]);
         let payload: Vec<u8> = vec![1, 2, 3];
         let limits = RecordLimits::new(2, 3);
-        let record = Record::new(offset, timestamp, key, payload);
+        let record = record_with_fields(offset, timestamp, key, payload);
 
         let result = record.encode(&limits);
 
-        assert_eq!(result, Err(StorageError::KeyTooLarge));
+        assert_eq!(
+            result,
+            Err(CodecError::KeyTooLarge),
+            "codec encode rejects key over limit: expected KeyTooLarge"
+        );
     }
 
     #[test]
@@ -998,11 +1298,15 @@ mod tests {
         let key: Option<Vec<u8>> = Some(vec![1, 2]);
         let payload: Vec<u8> = vec![1, 2, 3, 4];
         let limits = RecordLimits::new(2, 3);
-        let record = Record::new(offset, timestamp, key, payload);
+        let record = record_with_fields(offset, timestamp, key, payload);
 
         let result = record.encode(&limits);
 
-        assert_eq!(result, Err(StorageError::PayloadTooLarge));
+        assert_eq!(
+            result,
+            Err(CodecError::PayloadTooLarge),
+            "codec encode rejects payload over limit: expected PayloadTooLarge"
+        );
     }
 
     #[test]
@@ -1012,7 +1316,7 @@ mod tests {
         let key: Option<Vec<u8>> = Some(vec![]);
         let payload: Vec<u8> = vec![];
         let limits = RecordLimits::new(2, 3);
-        let record = Record::new(offset, timestamp, key, payload);
+        let record = record_with_fields(offset, timestamp, key, payload);
 
         let mut bytes = record
             .encode(&limits)
@@ -1023,7 +1327,11 @@ mod tests {
         let buytes_truncated = &bytes[0..HEADER_LENGTH];
 
         let result = Record::decode(buytes_truncated, &limits);
-        assert_eq!(result, Err(StorageError::KeyTooLarge));
+        assert_eq!(
+            result,
+            Err(CodecError::KeyTooLarge),
+            "codec decode rejects key over limit before body allocation: expected KeyTooLarge"
+        );
     }
 
     #[test]
@@ -1033,7 +1341,7 @@ mod tests {
         let key: Option<Vec<u8>> = Some(vec![]);
         let payload: Vec<u8> = vec![];
         let limits = RecordLimits::new(2, 3);
-        let record = Record::new(offset, timestamp, key, payload);
+        let record = record_with_fields(offset, timestamp, key, payload);
 
         let mut bytes = record
             .encode(&limits)
@@ -1043,7 +1351,11 @@ mod tests {
 
         let buytes_truncated = &bytes[0..HEADER_LENGTH];
         let result = Record::decode(buytes_truncated, &limits);
-        assert_eq!(result, Err(StorageError::PayloadTooLarge));
+        assert_eq!(
+            result,
+            Err(CodecError::PayloadTooLarge),
+            "codec decode rejects payload over limit before body allocation: expected PayloadTooLarge"
+        );
     }
 
     #[test]
@@ -1053,7 +1365,7 @@ mod tests {
         let key: Option<Vec<u8>> = Some(vec![]);
         let payload: Vec<u8> = vec![1, 2, 3];
         let limits = RecordLimits::new(2, 3);
-        let record = Record::new(offset, timestamp, key, payload);
+        let record = record_with_fields(offset, timestamp, key, payload);
 
         let mut bytes = record
             .encode(&limits)
@@ -1062,7 +1374,11 @@ mod tests {
         bytes[HEADER_LENGTH + 1] ^= 4;
 
         let result = Record::decode(&bytes, &limits);
-        assert_eq!(result, Err(StorageError::InvalidChecksum));
+        assert_eq!(
+            result,
+            Err(CodecError::InvalidChecksum),
+            "codec decode rejects corrupted payload: expected InvalidChecksum"
+        );
     }
 
     #[test]
@@ -1072,7 +1388,7 @@ mod tests {
         let key: Option<Vec<u8>> = Some(vec![]);
         let payload: Vec<u8> = vec![1, 2, 3];
         let limits = RecordLimits::new(2, 3);
-        let record = Record::new(offset, timestamp, key, payload);
+        let record = record_with_fields(offset, timestamp, key, payload);
 
         let mut bytes = record
             .encode(&limits)
@@ -1083,7 +1399,11 @@ mod tests {
         bytes[len - 1] = 3;
 
         let result = Record::decode(&bytes, &limits);
-        assert_eq!(result, Err(StorageError::InvalidChecksum));
+        assert_eq!(
+            result,
+            Err(CodecError::InvalidChecksum),
+            "codec decode rejects corrupted checksum: expected InvalidChecksum"
+        );
     }
 
     #[test]
@@ -1091,9 +1411,13 @@ mod tests {
     fn codec_length_conversion_rejects_unrepresentable_length() {
         let len =
             usize::try_from(u32::MAX).expect("usize should be able to represent u32::MAX") + 1;
-        let result = Record::check_len(len, u32::MAX, StorageError::KeyTooLarge);
+        let result = Record::check_len(len, u32::MAX, CodecError::KeyTooLarge);
 
-        assert_eq!(result, Err(StorageError::LengthOverflow));
+        assert_eq!(
+            result,
+            Err(CodecError::LengthOverflow),
+            "codec length conversion rejects unrepresentable length: expected LengthOverflow"
+        );
     }
 
     #[test]
@@ -1104,7 +1428,7 @@ mod tests {
         let key: Option<Vec<u8>> = Some(vec![]);
         let payload: Vec<u8> = vec![];
         let limits = RecordLimits::new(u32::MAX, u32::MAX);
-        let record = Record::new(offset, timestamp, key, payload);
+        let record = record_with_fields(offset, timestamp, key, payload);
 
         let mut bytes = record
             .encode(&limits)
@@ -1114,6 +1438,10 @@ mod tests {
         bytes[26..30].copy_from_slice(&1u32.to_be_bytes());
 
         let result = Record::decode(&bytes[0..HEADER_LENGTH], &limits);
-        assert_eq!(result, Err(StorageError::LengthOverflow));
+        assert_eq!(
+            result,
+            Err(CodecError::LengthOverflow),
+            "codec decode rejects record size overflow: expected LengthOverflow"
+        );
     }
 }
