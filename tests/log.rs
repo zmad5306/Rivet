@@ -14,8 +14,6 @@ use rivet::{
     },
 };
 
-use crate::common::record_with_fields;
-
 #[test]
 fn opening_new_log_creates_empty_file() {
     let dir = tempfile::tempdir().expect("temporary directory should be created");
@@ -91,7 +89,7 @@ fn append_one_record_writes_expected_encoded_bytes() {
 #[test]
 fn later_appends_grow_file_and_preserve_original_prefix() {
     let record1 = sample_record(0);
-    let record2 = record_with_fields(
+    let record2 = Record::new(
         0,
         1_600_000_000,
         Some(vec![10, 20, 30, 40, 50]),
@@ -137,7 +135,7 @@ fn later_appends_grow_file_and_preserve_original_prefix() {
 #[test]
 fn append_after_reopening_preserves_previous_records() {
     let record1 = sample_record(0);
-    let record2 = record_with_fields(
+    let record2 = Record::new(
         0,
         1_600_000_000,
         Some(vec![10, 20, 30, 40, 50]),
@@ -187,7 +185,7 @@ fn append_after_reopening_preserves_previous_records() {
 #[test]
 fn codec_rejection_leaves_file_unchanged() {
     let record1 = sample_record(0);
-    let record2 = record_with_fields(0, 1_600_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3, 4]);
+    let record2 = Record::new(0, 1_600_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3, 4]);
     let limits = RecordLimits::new(3, 3);
 
     let dir = tempfile::tempdir().expect("temporary directory should be created");
@@ -633,9 +631,9 @@ fn codec_rejection_allows_later_valid_appends() {
     let limits = RecordLimits::new(3, 3);
     let record1 = sample_record(0);
     let oversized_key_record =
-        record_with_fields(1, 1_700_000_000, Some(vec![10, 20, 30, 40]), vec![1, 2, 3]);
+        Record::new(1, 1_700_000_000, Some(vec![10, 20, 30, 40]), vec![1, 2, 3]);
     let oversized_payload_record =
-        record_with_fields(1, 1_700_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3, 4]);
+        Record::new(1, 1_700_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3, 4]);
     let record2 = sample_record(2);
     let dir = tempfile::tempdir().expect("temporary directory should be created");
     let path = dir.path().join("limits.log");
@@ -823,7 +821,7 @@ fn simultaneous_scanners_have_independent_positions() {
         let payload = vec![byte; payload_len];
         let offset = u64::try_from(n).expect("n should fit into u64");
         let timestamp = 1_700_000_000;
-        let record = record_with_fields(offset, timestamp, None, payload);
+        let record = Record::new(offset, timestamp, None, payload);
         log.append(&record)
             .expect("appending a record should succeed");
         expected_records.push(record);
@@ -910,7 +908,7 @@ fn append_after_partial_scan_preserves_unread_records() {
         let payload = vec![byte; payload_len];
         let offset = u64::try_from(n).expect("n should fit into u64");
         let timestamp = 1_700_000_000;
-        let record = record_with_fields(offset, timestamp, None, payload);
+        let record = Record::new(offset, timestamp, None, payload);
         log.append(&record)
             .expect("appending a record should succeed");
         expected_records.push(record);
