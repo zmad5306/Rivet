@@ -809,7 +809,7 @@ mod tests {
             Record::decode(&bytes, &limits).expect("record should decode successfully");
 
         assert_eq!(
-            record, record_from_bytes,
+            record_from_bytes, record,
             "decoded record should match its corresponding original record"
         );
         assert_eq!(
@@ -883,7 +883,7 @@ mod tests {
             .expect("record should encode successfully");
 
         assert_eq!(
-            bytes1, bytes2,
+            bytes2, bytes1,
             "encoding the same record twice should produce identical bytes"
         );
     }
@@ -1281,7 +1281,7 @@ mod tests {
             Record::decode(&bytes, &limits).expect("record should decode successfully");
 
         assert_eq!(
-            record, record_from_bytes,
+            record_from_bytes, record,
             "decoded record should match its corresponding original record"
         );
     }
