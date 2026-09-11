@@ -12,6 +12,6 @@ mod tests {
 
     #[test]
     fn version_returns_non_empty_string() {
-        assert!(!version().is_empty());
+        assert!(!version().is_empty(), "version should not be empty");
     }
 }
