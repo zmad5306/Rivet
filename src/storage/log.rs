@@ -149,14 +149,9 @@ pub struct Log {
     file: File,
     limits: RecordLimits,
     append_failed: bool,
-    next_offset: u64,
 }
 
 impl Log {
-    pub fn next_offset(&self) -> u64 {
-        self.next_offset
-    }
-
     fn write_record(
         writer: &mut impl AppendIo,
         append_failed: &mut bool,
@@ -234,7 +229,7 @@ impl Log {
         Ok(next_offset)
     }
 
-    pub fn open(path: &Path, limits: RecordLimits) -> Result<Self, StorageError> {
+    pub fn open(path: &Path, limits: RecordLimits) -> Result<(Self, u64), StorageError> {
         let file = OpenOptions::new()
             .create(true)
             .append(true)
@@ -245,12 +240,11 @@ impl Log {
             file,
             limits,
             append_failed: false,
-            next_offset: 0,
         };
 
-        log.next_offset = log.recover()?;
+        let next_offset = log.recover()?;
 
-        Ok(log)
+        Ok((log, next_offset))
     }
 
     pub fn append(&mut self, record: &Record) -> Result<(), StorageError> {
@@ -480,7 +474,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("temporary directory should be created");
         let path = dir.path().join("failed-append.log");
 
-        let mut log =
+        let (mut log, _) =
             Log::open(&path, RecordLimits::default()).expect("opening the log should succeed");
 
         std::fs::write(&path, &writer.written)

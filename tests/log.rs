@@ -41,7 +41,7 @@ fn reopening_log_preserves_existing_bytes() {
     let dir = tempfile::tempdir().expect("temporary directory should be created");
     let path = dir.path().join("reopen-preserves-bytes.log");
 
-    let mut log = Log::open(&path, RecordLimits::default())
+    let (mut log, _) = Log::open(&path, RecordLimits::default())
         .expect("opening a missing log path should succeed");
 
     log.append(&record)
@@ -72,7 +72,7 @@ fn append_one_record_writes_expected_encoded_bytes() {
     let dir = tempfile::tempdir().expect("temporary directory should be created");
     let path = dir.path().join("single-record.log");
 
-    let mut log = Log::open(&path, RecordLimits::default())
+    let (mut log, _) = Log::open(&path, RecordLimits::default())
         .expect("opening a missing log path should succeed");
 
     log.append(&record)
@@ -99,7 +99,7 @@ fn later_appends_grow_file_and_preserve_original_prefix() {
     let dir = tempfile::tempdir().expect("temporary directory should be created");
     let path = dir.path().join("append-preserves-prefix.log");
 
-    let mut log = Log::open(&path, RecordLimits::default())
+    let (mut log, _) = Log::open(&path, RecordLimits::default())
         .expect("opening a missing log path should succeed");
 
     log.append(&record1)
@@ -145,7 +145,7 @@ fn append_after_reopening_preserves_previous_records() {
     let dir = tempfile::tempdir().expect("temporary directory should be created");
     let path = dir.path().join("append-after-reopen.log");
 
-    let mut log = Log::open(&path, RecordLimits::default())
+    let (mut log, _) = Log::open(&path, RecordLimits::default())
         .expect("opening a missing log path should succeed");
 
     log.append(&record1)
@@ -155,7 +155,7 @@ fn append_after_reopening_preserves_previous_records() {
 
     drop(log);
 
-    log = Log::open(&path, RecordLimits::default()).expect("reopening the log should succeed");
+    (log, _) = Log::open(&path, RecordLimits::default()).expect("reopening the log should succeed");
 
     log.append(&record2)
         .expect("appending the second record should succeed");
@@ -191,7 +191,7 @@ fn codec_rejection_leaves_file_unchanged() {
     let dir = tempfile::tempdir().expect("temporary directory should be created");
     let path = dir.path().join("codec-rejection.log");
 
-    let mut log = Log::open(&path, limits).expect("opening a missing log path should succeed");
+    let (mut log, _) = Log::open(&path, limits).expect("opening a missing log path should succeed");
 
     log.append(&record1)
         .expect("appending a record should succeed");
@@ -240,7 +240,7 @@ fn opening_invalid_path_preserves_io_error_source() {
 fn scanning_empty_log_yields_no_records() {
     let dir = tempfile::tempdir().expect("temporary directory should be created");
     let path = dir.path().join("empty.log");
-    let log = Log::open(&path, RecordLimits::default())
+    let (log, _) = Log::open(&path, RecordLimits::default())
         .expect("opening a missing log path should succeed");
 
     let mut scanner = log.scan().expect("scanning an empty log should succeed");
@@ -264,7 +264,7 @@ fn scanning_one_record_preserves_all_fields() {
     let record = sample_record(0);
     let dir = tempfile::tempdir().expect("temporary directory should be created");
     let path = dir.path().join("scan-single-record.log");
-    let mut log = Log::open(&path, RecordLimits::default())
+    let (mut log, _) = Log::open(&path, RecordLimits::default())
         .expect("opening a missing log path should succeed");
 
     log.append(&record)
@@ -301,7 +301,7 @@ fn scanning_many_records_preserves_offset_order_and_contents() {
     ];
     let dir = tempfile::tempdir().expect("temporary directory should be created");
     let path = dir.path().join("scan-many-records.log");
-    let mut log = Log::open(&path, RecordLimits::default())
+    let (mut log, _) = Log::open(&path, RecordLimits::default())
         .expect("opening a missing log path should succeed");
 
     records.iter().for_each(|record| {
@@ -329,7 +329,7 @@ fn scanning_reopened_log_preserves_all_records() {
     let record3 = sample_record(2);
     let dir = tempfile::tempdir().expect("temporary directory should be created");
     let path = dir.path().join("scan-reopened.log");
-    let mut log = Log::open(&path, RecordLimits::default())
+    let (mut log, _) = Log::open(&path, RecordLimits::default())
         .expect("opening a missing log path should succeed");
 
     log.append(&record1)
@@ -341,7 +341,7 @@ fn scanning_reopened_log_preserves_all_records() {
 
     drop(log);
 
-    log = Log::open(&path, RecordLimits::default()).expect("reopening the log should succeed");
+    (log, _) = Log::open(&path, RecordLimits::default()).expect("reopening the log should succeed");
 
     let scanner = log.scan().expect("scanning a reopened log should succeed");
 
@@ -360,7 +360,7 @@ fn append_after_scanning_writes_at_end() {
     let record2 = sample_record(1);
     let dir = tempfile::tempdir().expect("temporary directory should be created");
     let path = dir.path().join("append-after-scan.log");
-    let mut log = Log::open(&path, RecordLimits::default())
+    let (mut log, _) = Log::open(&path, RecordLimits::default())
         .expect("opening a missing log path should succeed");
 
     log.append(&record1)
@@ -427,7 +427,7 @@ fn opening_truncates_partial_trailing_header() {
     write(&path, &bytes)
         .expect("writing a complete record followed by a partial header should succeed");
 
-    let log = Log::open(&path, RecordLimits::default())
+    let (log, _) = Log::open(&path, RecordLimits::default())
         .expect("opening should recover the log by truncating the partial trailing header");
 
     let mut scanner = log
@@ -475,7 +475,7 @@ fn opening_truncates_partial_trailing_body() {
     write(&path, &bytes)
         .expect("writing a complete record followed by a partial body should succeed");
 
-    let log = Log::open(&path, RecordLimits::default())
+    let (log, _) = Log::open(&path, RecordLimits::default())
         .expect("opening should recover the log by truncating the partial trailing body");
 
     let mut scanner = log
@@ -523,7 +523,7 @@ fn opening_truncates_partial_trailing_checksum() {
     write(&path, &bytes)
         .expect("writing a complete record followed by a partial checksum should succeed");
 
-    let log = Log::open(&path, RecordLimits::default())
+    let (log, _) = Log::open(&path, RecordLimits::default())
         .expect("opening should recover the log by truncating the partial trailing checksum");
 
     let mut scanner = log
@@ -602,7 +602,7 @@ fn codec_rejection_allows_later_valid_appends() {
     let record2 = sample_record(2);
     let dir = tempfile::tempdir().expect("temporary directory should be created");
     let path = dir.path().join("limits.log");
-    let mut log = Log::open(&path, limits).expect("opening the log should succeed");
+    let (mut log, _) = Log::open(&path, limits).expect("opening the log should succeed");
 
     log.append(&record1)
         .expect("appending the first valid record should succeed");
@@ -677,7 +677,7 @@ fn scanning_relative_path_survives_working_directory_change() {
     }
 
     let record = sample_record(0);
-    let mut log = Log::open(std::path::Path::new("events.log"), RecordLimits::default())
+    let (mut log, _) = Log::open(std::path::Path::new("events.log"), RecordLimits::default())
         .expect("opening a relative log path should succeed");
     log.append(&record)
         .expect("appending a record should succeed");
@@ -703,7 +703,7 @@ fn scanning_renamed_log_reads_original_file() {
     let record = sample_record(0);
     let dir = tempfile::tempdir().expect("temporary directory should be created");
     let path = dir.path().join("original.log");
-    let mut log =
+    let (mut log, _) =
         Log::open(&path, RecordLimits::default()).expect("opening the log should succeed");
 
     log.append(&record)
@@ -713,7 +713,7 @@ fn scanning_renamed_log_reads_original_file() {
         .expect("renaming the log file should succeed");
 
     let renamed_path = dir.path().join("renamed.log");
-    let renamed_log = Log::open(&renamed_path, RecordLimits::default())
+    let (renamed_log, _) = Log::open(&renamed_path, RecordLimits::default())
         .expect("opening the renamed log should succeed");
     let scanner = renamed_log
         .scan()
@@ -735,7 +735,7 @@ fn scanning_replaced_path_reads_original_file() {
     let replacement_only_record = sample_record(2);
     let dir = tempfile::tempdir().expect("temporary directory should be created");
     let path = dir.path().join("original.log");
-    let mut log =
+    let (mut log, _) =
         Log::open(&path, RecordLimits::default()).expect("opening the log should succeed");
 
     log.append(&original_only_record)
@@ -744,7 +744,7 @@ fn scanning_replaced_path_reads_original_file() {
     std::fs::rename(&path, dir.path().join("renamed.log"))
         .expect("renaming the log file should succeed");
 
-    let mut replacement_log = Log::open(&path, RecordLimits::default())
+    let (mut replacement_log, _) = Log::open(&path, RecordLimits::default())
         .expect("opening the replacement log should succeed");
 
     replacement_log
@@ -776,7 +776,7 @@ fn simultaneous_scanners_have_independent_positions() {
     let record_count: usize = 99;
     let dir = tempfile::tempdir().expect("temporary directory should be created");
     let path = dir.path().join("original.log");
-    let mut log =
+    let (mut log, _) =
         Log::open(&path, RecordLimits::default()).expect("opening the log should succeed");
     let mut expected_records = Vec::with_capacity(record_count);
 
@@ -863,7 +863,7 @@ fn append_after_partial_scan_preserves_unread_records() {
     let record_count: usize = 99;
     let dir = tempfile::tempdir().expect("temporary directory should be created");
     let path = dir.path().join("original.log");
-    let mut log =
+    let (mut log, _) =
         Log::open(&path, RecordLimits::default()).expect("opening the log should succeed");
     let mut expected_records = Vec::with_capacity(record_count);
 
