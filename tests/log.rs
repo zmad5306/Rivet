@@ -1109,9 +1109,63 @@ fn recovery_truncates_every_incomplete_record_prefix() {
 
 #[test]
 fn repeated_recovery_preserves_file_bytes_and_next_offset() {
-    todo!(
-        "{}",
-        "Recover a log with complete records and an incomplete tail, capture its bytes and next offset, then reopen again and verify identical bytes, records, and next offset."
+    let record1 = sample_record(0);
+    let record2 = sample_record(1);
+    let record3 = sample_record(2);
+    let record3_bytes = record3
+        .encode(&RecordLimits::default())
+        .expect("encoding the third record should succeed");
+    let partial_record3_bytes = record3_bytes[..record3_bytes.len() / 2].to_vec();
+    let dir = tempfile::tempdir().expect("temporary directory should be created");
+    let path = dir.path().join("preserve_bytes.log");
+
+    let (mut log, next_offset) =
+        Log::open(&path, RecordLimits::default()).expect("opening the log should succeed");
+    assert_eq!(
+        next_offset, 0,
+        "the next offset should be 0 after opening an empty log"
+    );
+    log.append(&record1)
+        .expect("appending the first record should succeed");
+    log.append(&record2)
+        .expect("appending the second record should succeed");
+
+    drop(log);
+
+    let mut file = OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .expect("opening the log file for appending should succeed");
+
+    file.write_all(&partial_record3_bytes)
+        .expect("writing the partial record bytes should succeed");
+    drop(file);
+
+    let (log, next_offset1) =
+        Log::open(&path, RecordLimits::default()).expect("reopening the log should succeed");
+    let log_bytes1 = std::fs::read(&path).expect("reading the log file bytes should succeed");
+
+    drop(log);
+
+    let (_, next_offset2) =
+        Log::open(&path, RecordLimits::default()).expect("reopening the log should succeed");
+    let log_bytes2 = std::fs::read(&path).expect("reading the log file bytes should succeed");
+
+    assert_eq!(
+        log_bytes2, log_bytes1,
+        "log bytes should be identical after reopening"
+    );
+    assert_eq!(
+        next_offset2, next_offset1,
+        "next offsets should be identical after reopening"
+    );
+    assert_eq!(
+        next_offset1, 2,
+        "the next offset should be 2 after reopening the log the first time"
+    );
+    assert_eq!(
+        next_offset2, 2,
+        "the next offset should be 2 after reopening the log the second time"
     );
 }
 
