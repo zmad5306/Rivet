@@ -20,7 +20,7 @@ fn opening_new_log_creates_empty_file() {
     let dir = tempfile::tempdir().expect("temporary directory should be created");
     let path = dir.path().join("new-log.log");
 
-    Log::open(&path, 0, RecordLimits::default())
+    Log::open_active(&path, 0, RecordLimits::default())
         .expect("opening a missing log path should succeed");
 
     let file_bytes = read(&path).expect("newly created log should be readable");
@@ -43,7 +43,7 @@ fn reopening_log_preserves_existing_bytes() {
     let dir = tempfile::tempdir().expect("temporary directory should be created");
     let path = dir.path().join("reopen-preserves-bytes.log");
 
-    let (mut log, _) = Log::open(&path, 0, RecordLimits::default())
+    let (mut log, _) = Log::open_active(&path, 0, RecordLimits::default())
         .expect("opening a missing log path should succeed");
 
     log.append(&record)
@@ -53,7 +53,7 @@ fn reopening_log_preserves_existing_bytes() {
 
     drop(log);
 
-    Log::open(&path, 0, RecordLimits::default()).expect("reopening the log should succeed");
+    Log::open_active(&path, 0, RecordLimits::default()).expect("reopening the log should succeed");
 
     let reopened_file_bytes =
         read(&path).expect("existing log should remain readable after reopening");
@@ -74,7 +74,7 @@ fn append_one_record_writes_expected_encoded_bytes() {
     let dir = tempfile::tempdir().expect("temporary directory should be created");
     let path = dir.path().join("single-record.log");
 
-    let (mut log, _) = Log::open(&path, 0, RecordLimits::default())
+    let (mut log, _) = Log::open_active(&path, 0, RecordLimits::default())
         .expect("opening a missing log path should succeed");
 
     log.append(&record)
@@ -101,7 +101,7 @@ fn later_appends_grow_file_and_preserve_original_prefix() {
     let dir = tempfile::tempdir().expect("temporary directory should be created");
     let path = dir.path().join("append-preserves-prefix.log");
 
-    let (mut log, _) = Log::open(&path, 0, RecordLimits::default())
+    let (mut log, _) = Log::open_active(&path, 0, RecordLimits::default())
         .expect("opening a missing log path should succeed");
 
     log.append(&record1)
@@ -147,7 +147,7 @@ fn append_after_reopening_preserves_previous_records() {
     let dir = tempfile::tempdir().expect("temporary directory should be created");
     let path = dir.path().join("append-after-reopen.log");
 
-    let (mut log, _) = Log::open(&path, 0, RecordLimits::default())
+    let (mut log, _) = Log::open_active(&path, 0, RecordLimits::default())
         .expect("opening a missing log path should succeed");
 
     log.append(&record1)
@@ -157,8 +157,8 @@ fn append_after_reopening_preserves_previous_records() {
 
     drop(log);
 
-    (log, _) =
-        Log::open(&path, 0, RecordLimits::default()).expect("reopening the log should succeed");
+    (log, _) = Log::open_active(&path, 0, RecordLimits::default())
+        .expect("reopening the log should succeed");
 
     log.append(&record2)
         .expect("appending the second record should succeed");
@@ -195,7 +195,7 @@ fn codec_rejection_leaves_file_unchanged() {
     let path = dir.path().join("codec-rejection.log");
 
     let (mut log, _) =
-        Log::open(&path, 0, limits).expect("opening a missing log path should succeed");
+        Log::open_active(&path, 0, limits).expect("opening a missing log path should succeed");
 
     log.append(&record1)
         .expect("appending a record should succeed");
@@ -219,7 +219,7 @@ fn opening_invalid_path_preserves_io_error_source() {
     let missing_subdir = dir.path().join("missing-subdir");
     let path = missing_subdir.as_path().join("invalid-path.log");
 
-    let error = Log::open(&path, 0, RecordLimits::default())
+    let error = Log::open_active(&path, 0, RecordLimits::default())
         .expect_err("opening a log beneath a missing parent directory should fail");
 
     assert!(
@@ -244,7 +244,7 @@ fn opening_invalid_path_preserves_io_error_source() {
 fn scanning_empty_log_yields_no_records() {
     let dir = tempfile::tempdir().expect("temporary directory should be created");
     let path = dir.path().join("empty.log");
-    let (log, _) = Log::open(&path, 0, RecordLimits::default())
+    let (log, _) = Log::open_active(&path, 0, RecordLimits::default())
         .expect("opening a missing log path should succeed");
 
     let mut scanner = log.scan().expect("scanning an empty log should succeed");
@@ -268,7 +268,7 @@ fn scanning_one_record_preserves_all_fields() {
     let record = sample_record(0);
     let dir = tempfile::tempdir().expect("temporary directory should be created");
     let path = dir.path().join("scan-single-record.log");
-    let (mut log, _) = Log::open(&path, 0, RecordLimits::default())
+    let (mut log, _) = Log::open_active(&path, 0, RecordLimits::default())
         .expect("opening a missing log path should succeed");
 
     log.append(&record)
@@ -300,7 +300,7 @@ fn scanning_many_records_preserves_offset_order_and_contents() {
     ];
     let dir = tempfile::tempdir().expect("temporary directory should be created");
     let path = dir.path().join("scan-many-records.log");
-    let (mut log, _) = Log::open(&path, 0, RecordLimits::default())
+    let (mut log, _) = Log::open_active(&path, 0, RecordLimits::default())
         .expect("opening a missing log path should succeed");
 
     records.iter().for_each(|record| {
@@ -328,7 +328,7 @@ fn scanning_reopened_log_preserves_all_records() {
     let record3 = sample_record(2);
     let dir = tempfile::tempdir().expect("temporary directory should be created");
     let path = dir.path().join("scan-reopened.log");
-    let (mut log, _) = Log::open(&path, 0, RecordLimits::default())
+    let (mut log, _) = Log::open_active(&path, 0, RecordLimits::default())
         .expect("opening a missing log path should succeed");
 
     log.append(&record1)
@@ -340,8 +340,8 @@ fn scanning_reopened_log_preserves_all_records() {
 
     drop(log);
 
-    (log, _) =
-        Log::open(&path, 0, RecordLimits::default()).expect("reopening the log should succeed");
+    (log, _) = Log::open_active(&path, 0, RecordLimits::default())
+        .expect("reopening the log should succeed");
 
     let scanner = log.scan().expect("scanning a reopened log should succeed");
 
@@ -360,7 +360,7 @@ fn append_after_scanning_writes_at_end() {
     let record2 = sample_record(1);
     let dir = tempfile::tempdir().expect("temporary directory should be created");
     let path = dir.path().join("append-after-scan.log");
-    let (mut log, _) = Log::open(&path, 0, RecordLimits::default())
+    let (mut log, _) = Log::open_active(&path, 0, RecordLimits::default())
         .expect("opening a missing log path should succeed");
 
     log.append(&record1)
@@ -427,7 +427,7 @@ fn opening_truncates_partial_trailing_header() {
     write(&path, &bytes)
         .expect("writing a complete record followed by a partial header should succeed");
 
-    let (log, _) = Log::open(&path, 0, RecordLimits::default())
+    let (log, _) = Log::open_active(&path, 0, RecordLimits::default())
         .expect("opening should recover the log by truncating the partial trailing header");
 
     let mut scanner = log
@@ -475,7 +475,7 @@ fn opening_truncates_partial_trailing_body() {
     write(&path, &bytes)
         .expect("writing a complete record followed by a partial body should succeed");
 
-    let (log, _) = Log::open(&path, 0, RecordLimits::default())
+    let (log, _) = Log::open_active(&path, 0, RecordLimits::default())
         .expect("opening should recover the log by truncating the partial trailing body");
 
     let mut scanner = log
@@ -523,7 +523,7 @@ fn opening_truncates_partial_trailing_checksum() {
     write(&path, &bytes)
         .expect("writing a complete record followed by a partial checksum should succeed");
 
-    let (log, _) = Log::open(&path, 0, RecordLimits::default())
+    let (log, _) = Log::open_active(&path, 0, RecordLimits::default())
         .expect("opening should recover the log by truncating the partial trailing checksum");
 
     let mut scanner = log
@@ -567,7 +567,7 @@ fn opening_rejects_invalid_checksum_without_modifying_file() {
 
     write(&path, &bytes).expect("writing the corrupt record should succeed");
 
-    let error = Log::open(&path, 0, RecordLimits::default()).expect_err(
+    let error = Log::open_active(&path, 0, RecordLimits::default()).expect_err(
         "opening a log with a complete record containing an invalid checksum should fail",
     );
 
@@ -611,7 +611,7 @@ fn first_corrupt_record_reports_path_and_byte_position_zero() {
 
     write(&path, &record_bytes).expect("writing the corrupt record should succeed");
 
-    let error = Log::open(&path, 0, RecordLimits::default())
+    let error = Log::open_active(&path, 0, RecordLimits::default())
         .expect_err("opening a log with a corrupt record should fail");
 
     assert!(
@@ -653,7 +653,7 @@ fn mid_log_corrupt_record_reports_path_and_record_start() {
     file.write_all(&record2_bytes)
         .expect("writing the corrupt record should succeed");
 
-    let error = Log::open(&path, 0, RecordLimits::default())
+    let error = Log::open_active(&path, 0, RecordLimits::default())
         .expect_err("opening a log with a corrupt record should fail");
 
     let expected_byte_position =
@@ -683,7 +683,7 @@ fn codec_rejection_allows_later_valid_appends() {
     let record2 = sample_record(2);
     let dir = tempfile::tempdir().expect("temporary directory should be created");
     let path = dir.path().join("limits.log");
-    let (mut log, _) = Log::open(&path, 0, limits).expect("opening the log should succeed");
+    let (mut log, _) = Log::open_active(&path, 0, limits).expect("opening the log should succeed");
 
     log.append(&record1)
         .expect("appending the first valid record should succeed");
@@ -755,7 +755,7 @@ fn scanning_relative_path_survives_working_directory_change() {
     }
 
     let record = sample_record(0);
-    let (mut log, _) = Log::open(
+    let (mut log, _) = Log::open_active(
         std::path::Path::new("events.log"),
         0,
         RecordLimits::default(),
@@ -784,8 +784,8 @@ fn scanning_renamed_log_reads_original_file() {
     let record = sample_record(0);
     let dir = tempfile::tempdir().expect("temporary directory should be created");
     let path = dir.path().join("original.log");
-    let (mut log, _) =
-        Log::open(&path, 0, RecordLimits::default()).expect("opening the log should succeed");
+    let (mut log, _) = Log::open_active(&path, 0, RecordLimits::default())
+        .expect("opening the log should succeed");
 
     log.append(&record)
         .expect("appending a record should succeed");
@@ -794,7 +794,7 @@ fn scanning_renamed_log_reads_original_file() {
         .expect("renaming the log file should succeed");
 
     let renamed_path = dir.path().join("renamed.log");
-    let (renamed_log, _) = Log::open(&renamed_path, 0, RecordLimits::default())
+    let (renamed_log, _) = Log::open_active(&renamed_path, 0, RecordLimits::default())
         .expect("opening the renamed log should succeed");
     let scanner = renamed_log
         .scan()
@@ -816,8 +816,8 @@ fn scanning_replaced_path_reads_original_file() {
     let replacement_only_record = sample_record(2);
     let dir = tempfile::tempdir().expect("temporary directory should be created");
     let path = dir.path().join("original.log");
-    let (mut log, _) =
-        Log::open(&path, 0, RecordLimits::default()).expect("opening the log should succeed");
+    let (mut log, _) = Log::open_active(&path, 0, RecordLimits::default())
+        .expect("opening the log should succeed");
 
     log.append(&original_only_record)
         .expect("appending a record should succeed");
@@ -825,7 +825,7 @@ fn scanning_replaced_path_reads_original_file() {
     std::fs::rename(&path, dir.path().join("renamed.log"))
         .expect("renaming the log file should succeed");
 
-    let (mut replacement_log, _) = Log::open(&path, 0, RecordLimits::default())
+    let (mut replacement_log, _) = Log::open_active(&path, 0, RecordLimits::default())
         .expect("opening the replacement log should succeed");
 
     replacement_log
@@ -857,8 +857,8 @@ fn simultaneous_scanners_have_independent_positions() {
     let record_count: usize = 99;
     let dir = tempfile::tempdir().expect("temporary directory should be created");
     let path = dir.path().join("original.log");
-    let (mut log, _) =
-        Log::open(&path, 0, RecordLimits::default()).expect("opening the log should succeed");
+    let (mut log, _) = Log::open_active(&path, 0, RecordLimits::default())
+        .expect("opening the log should succeed");
     let mut expected_records = Vec::with_capacity(record_count);
 
     for n in 0..record_count {
@@ -944,8 +944,8 @@ fn append_after_partial_scan_preserves_unread_records() {
     let record_count: usize = 99;
     let dir = tempfile::tempdir().expect("temporary directory should be created");
     let path = dir.path().join("original.log");
-    let (mut log, _) =
-        Log::open(&path, 0, RecordLimits::default()).expect("opening the log should succeed");
+    let (mut log, _) = Log::open_active(&path, 0, RecordLimits::default())
+        .expect("opening the log should succeed");
     let mut expected_records = Vec::with_capacity(record_count);
 
     for n in 0..record_count {
@@ -1003,15 +1003,15 @@ fn append_after_partial_scan_preserves_unread_records() {
 fn recovery_restores_next_offset_after_zero_records() {
     let dir = tempfile::tempdir().expect("temporary directory should be created");
     let path = dir.path().join("zero.log");
-    let (mut log, next_offset) =
-        Log::open(&path, 0, RecordLimits::default()).expect("opening the log should succeed");
+    let (mut log, next_offset) = Log::open_active(&path, 0, RecordLimits::default())
+        .expect("opening the log should succeed");
     assert_eq!(next_offset, 0, "next offset should be 0 for an empty log");
     let record = sample_record(next_offset);
     log.append(&record)
         .expect("appending a record should succeed");
     drop(log);
-    let (_, next_offset) =
-        Log::open(&path, 0, RecordLimits::default()).expect("reopening the log should succeed");
+    let (_, next_offset) = Log::open_active(&path, 0, RecordLimits::default())
+        .expect("reopening the log should succeed");
     assert_eq!(
         next_offset, 1,
         "next offset should be 1 after appending one record"
@@ -1022,8 +1022,8 @@ fn recovery_restores_next_offset_after_zero_records() {
 fn recovery_restores_next_offset_after_one_record() {
     let dir = tempfile::tempdir().expect("temporary directory should be created");
     let path = dir.path().join("one.log");
-    let (mut log, next_offset) =
-        Log::open(&path, 0, RecordLimits::default()).expect("opening the log should succeed");
+    let (mut log, next_offset) = Log::open_active(&path, 0, RecordLimits::default())
+        .expect("opening the log should succeed");
     assert_eq!(next_offset, 0, "next offset should be 0 for an empty log");
 
     let record1 = sample_record(next_offset);
@@ -1031,8 +1031,8 @@ fn recovery_restores_next_offset_after_one_record() {
         .expect("appending a record should succeed");
     drop(log);
 
-    let (mut log, next_offset) =
-        Log::open(&path, 0, RecordLimits::default()).expect("reopening the log should succeed");
+    let (mut log, next_offset) = Log::open_active(&path, 0, RecordLimits::default())
+        .expect("reopening the log should succeed");
     assert_eq!(
         next_offset, 1,
         "next offset should be 1 after appending one record"
@@ -1043,8 +1043,8 @@ fn recovery_restores_next_offset_after_one_record() {
         .expect("appending a second record should succeed");
     drop(log);
 
-    let (log, next_offset) =
-        Log::open(&path, 0, RecordLimits::default()).expect("reopening the log should succeed");
+    let (log, next_offset) = Log::open_active(&path, 0, RecordLimits::default())
+        .expect("reopening the log should succeed");
     assert_eq!(
         next_offset, 2,
         "next offset should be 2 after appending two records"
@@ -1066,8 +1066,8 @@ fn recovery_restores_next_offset_after_one_hundred_records() {
     let dir = tempfile::tempdir().expect("temporary directory should be created");
     let path = dir.path().join("one_hundred.log");
     let mut records = Vec::new();
-    let (mut log, next_offset) =
-        Log::open(&path, 0, RecordLimits::default()).expect("opening the log should succeed");
+    let (mut log, next_offset) = Log::open_active(&path, 0, RecordLimits::default())
+        .expect("opening the log should succeed");
     assert_eq!(next_offset, 0, "next offset should be 0 for an empty log");
 
     for i in 0..100 {
@@ -1078,8 +1078,8 @@ fn recovery_restores_next_offset_after_one_hundred_records() {
     }
     drop(log);
 
-    let (mut log, next_offset) =
-        Log::open(&path, 0, RecordLimits::default()).expect("reopening the log should succeed");
+    let (mut log, next_offset) = Log::open_active(&path, 0, RecordLimits::default())
+        .expect("reopening the log should succeed");
     assert_eq!(
         next_offset, 100,
         "next offset should be 100 after appending 100 records"
@@ -1098,8 +1098,8 @@ fn recovery_restores_next_offset_after_one_hundred_records() {
         .expect("appending the 101st record should succeed");
     drop(log);
 
-    let (log, next_offset) =
-        Log::open(&path, 0, RecordLimits::default()).expect("reopening the log should succeed");
+    let (log, next_offset) = Log::open_active(&path, 0, RecordLimits::default())
+        .expect("reopening the log should succeed");
     assert_eq!(
         next_offset, 101,
         "next offset should be 101 after appending 101 records"
@@ -1126,8 +1126,8 @@ fn recovery_truncates_every_incomplete_record_prefix() {
     for n in 0..encoded_bytes.len() {
         let record = sample_record(0);
         let path = dir.path().join(format!("trunc-{}.log", n));
-        let (mut log, next_offset) =
-            Log::open(&path, 0, RecordLimits::default()).expect("opening the log should succeed");
+        let (mut log, next_offset) = Log::open_active(&path, 0, RecordLimits::default())
+            .expect("opening the log should succeed");
         assert_eq!(next_offset, 0, "next offset should be 0 for an empty log");
 
         log.append(&record)
@@ -1146,8 +1146,8 @@ fn recovery_truncates_every_incomplete_record_prefix() {
             .expect("writing the partial record bytes should succeed");
         drop(file);
 
-        let (mut log, next_offset) =
-            Log::open(&path, 0, RecordLimits::default()).expect("reopening the log should succeed");
+        let (mut log, next_offset) = Log::open_active(&path, 0, RecordLimits::default())
+            .expect("reopening the log should succeed");
         assert_eq!(
             next_offset, 1,
             "next offset should remain 1 after truncating the incomplete record prefix"
@@ -1199,8 +1199,8 @@ fn repeated_recovery_preserves_file_bytes_and_next_offset() {
     let dir = tempfile::tempdir().expect("temporary directory should be created");
     let path = dir.path().join("preserve_bytes.log");
 
-    let (mut log, next_offset) =
-        Log::open(&path, 0, RecordLimits::default()).expect("opening the log should succeed");
+    let (mut log, next_offset) = Log::open_active(&path, 0, RecordLimits::default())
+        .expect("opening the log should succeed");
     assert_eq!(
         next_offset, 0,
         "the next offset should be 0 after opening an empty log"
@@ -1221,14 +1221,14 @@ fn repeated_recovery_preserves_file_bytes_and_next_offset() {
         .expect("writing the partial record bytes should succeed");
     drop(file);
 
-    let (log, next_offset1) =
-        Log::open(&path, 0, RecordLimits::default()).expect("reopening the log should succeed");
+    let (log, next_offset1) = Log::open_active(&path, 0, RecordLimits::default())
+        .expect("reopening the log should succeed");
     let log_bytes1 = std::fs::read(&path).expect("reading the log file bytes should succeed");
 
     drop(log);
 
-    let (_, next_offset2) =
-        Log::open(&path, 0, RecordLimits::default()).expect("reopening the log should succeed");
+    let (_, next_offset2) = Log::open_active(&path, 0, RecordLimits::default())
+        .expect("reopening the log should succeed");
     let log_bytes2 = std::fs::read(&path).expect("reading the log file bytes should succeed");
 
     assert_eq!(
@@ -1275,7 +1275,7 @@ fn recovery_rejects_offset_gaps_without_modifying_file() {
 
     drop(file);
 
-    let error = Log::open(&path, 0, RecordLimits::default())
+    let error = Log::open_active(&path, 0, RecordLimits::default())
         .expect_err("opening the log with offset gaps should fail");
     let log_bytes_after_error =
         std::fs::read(&path).expect("reading the log file bytes should succeed");
@@ -1317,7 +1317,7 @@ fn recovery_rejects_offset_gaps_at_beginning_without_modifying_file() {
 
     drop(file);
 
-    let error = Log::open(&path, 0, RecordLimits::default())
+    let error = Log::open_active(&path, 0, RecordLimits::default())
         .expect_err("opening the log with offset gaps should fail");
     let log_bytes_after_error =
         std::fs::read(&path).expect("reading the log file bytes should succeed");
@@ -1364,7 +1364,7 @@ fn recovery_rejects_duplicate_offsets_without_modifying_file() {
 
     drop(file);
 
-    let error = Log::open(&path, 0, RecordLimits::default())
+    let error = Log::open_active(&path, 0, RecordLimits::default())
         .expect_err("opening the log with offset gaps should fail");
     let file_bytes = std::fs::read(&path).expect("reading the log file bytes should succeed");
 
@@ -1417,7 +1417,7 @@ fn recovery_rejects_regressing_offsets_without_modifying_file() {
 
     drop(file);
 
-    let error = Log::open(&path, 0, RecordLimits::default())
+    let error = Log::open_active(&path, 0, RecordLimits::default())
         .expect_err("opening the log with regressing offsets should fail");
     let file_bytes = std::fs::read(&path).expect("reading the log file bytes should succeed");
 
@@ -1466,7 +1466,7 @@ fn recovery_rejects_mid_log_invalid_magic_without_modifying_file() {
         .expect("writing the third record bytes should succeed");
     drop(file);
 
-    let error = Log::open(&path, 0, RecordLimits::default())
+    let error = Log::open_active(&path, 0, RecordLimits::default())
         .expect_err("opening the log with invalid magic should fail");
     let file_bytes = std::fs::read(&path).expect("reading the log file bytes should succeed");
 
@@ -1522,7 +1522,7 @@ fn mid_log_invalid_magic_reports_context_and_source() {
         .expect("writing the third record bytes should succeed");
     drop(file);
 
-    let error = Log::open(&path, 0, RecordLimits::default())
+    let error = Log::open_active(&path, 0, RecordLimits::default())
         .expect_err("opening the log with invalid magic should fail");
     let file_bytes = std::fs::read(&path).expect("reading the log file bytes should succeed");
 
@@ -1602,7 +1602,7 @@ fn recovery_rejects_mid_log_invalid_checksum_without_modifying_file() {
         .expect("writing the third record bytes should succeed");
     drop(file);
 
-    let error = Log::open(&path, 0, RecordLimits::default())
+    let error = Log::open_active(&path, 0, RecordLimits::default())
         .expect_err("opening the log with invalid checksum should fail");
     let file_bytes = std::fs::read(&path).expect("reading the log file bytes should succeed");
 
@@ -1634,7 +1634,7 @@ fn recovery_of_empty_log_returns_nonzero_base_offset() {
     let path = dir.path().join("empty.log");
     let base_offset = 42;
 
-    let (_, next_offset) = Log::open(&path, base_offset, RecordLimits::default())
+    let (_, next_offset) = Log::open_active(&path, base_offset, RecordLimits::default())
         .expect("opening the missing log should succeed");
 
     assert_eq!(
@@ -1672,8 +1672,8 @@ fn recovery_restores_next_offset_from_nonzero_base() {
         .expect("writing the third record bytes should succeed");
     drop(file);
 
-    let (log, next_offset) =
-        Log::open(&path, 42, RecordLimits::default()).expect("opening the log should succeed");
+    let (log, next_offset) = Log::open_active(&path, 42, RecordLimits::default())
+        .expect("opening the log should succeed");
     assert_eq!(next_offset, 45, "recovery should return the next offset 45");
 
     let scanner = log.scan().expect("scanning the log should succeed");
@@ -1716,7 +1716,7 @@ fn recovery_rejects_first_offset_below_nonzero_base_without_modifying_file() {
     let original_file_bytes =
         std::fs::read(&path).expect("reading the original log file bytes should succeed");
 
-    let result = Log::open(&path, base_offset, RecordLimits::default());
+    let result = Log::open_active(&path, base_offset, RecordLimits::default());
     assert!(
         matches!(result, Err(StorageError::UnexpectedOffset { expected, actual }) if expected == base_offset && actual == base_offset - 1)
     );
@@ -1747,7 +1747,7 @@ fn recovery_rejects_first_offset_above_nonzero_base_without_modifying_file() {
     let original_file_bytes =
         std::fs::read(&path).expect("reading the original log file bytes should succeed");
 
-    let result = Log::open(&path, base_offset, RecordLimits::default());
+    let result = Log::open_active(&path, base_offset, RecordLimits::default());
     assert!(
         matches!(result, Err(StorageError::UnexpectedOffset { expected, actual }) if expected == base_offset && actual == base_offset + 1)
     );
@@ -1758,4 +1758,59 @@ fn recovery_rejects_first_offset_above_nonzero_base_without_modifying_file() {
         file_bytes_after_failed_recovery, original_file_bytes,
         "file bytes should remain unchanged after failed recovery"
     );
+}
+
+#[test]
+fn opening_missing_closed_log_fails_without_creating_file() {
+    todo!(
+        "Implement this test in this order:\n\
+         1. Create a temporary directory and choose a path that does not exist.\n\
+         2. Call the closed/read-only Log opening API with base offset 0 and default record limits.\n\
+         3. Extract the returned StorageError without panicking.\n\
+         4. Assert that the error retains an std::io::Error whose kind is NotFound.\n\
+         5. Assert that the path still does not exist, proving closed opening never creates a file."
+    )
+}
+
+#[test]
+fn closed_log_validates_and_scans_records_from_nonzero_base() {
+    todo!(
+        "Implement this test in this order:\n\
+         1. Choose a nonzero base offset and construct several consecutive records beginning there.\n\
+         2. Encode the records with one RecordLimits value and write them consecutively to a temporary file.\n\
+         3. Save the complete file bytes before opening it.\n\
+         4. Open the file through the closed/read-only Log API with the chosen base offset and equivalent limits.\n\
+         5. Assert that validation reports the offset immediately after the final record.\n\
+         6. Scan the returned log and assert that every offset and record is preserved in order.\n\
+         7. Read the file again and assert that closed validation did not change its bytes."
+    )
+}
+
+#[test]
+fn closed_log_rejects_every_incomplete_tail_without_modifying_file() {
+    todo!(
+        "Implement this test in this order:\n\
+         1. Encode one complete record at a chosen nonzero base offset.\n\
+         2. Encode the following record and iterate over every incomplete nonempty prefix of its bytes.\n\
+         3. For each prefix, create a separate temporary file containing the complete record followed by that prefix.\n\
+         4. Save the exact bytes before opening the file.\n\
+         5. Attempt to open it through the closed/read-only Log API using the chosen base offset.\n\
+         6. Assert that opening returns the appropriate incomplete-header or incomplete-body storage/codec error.\n\
+         7. Read the file again and assert byte-for-byte equality with the saved contents.\n\
+         8. Include the prefix length in assertion messages so a failure identifies the boundary."
+    )
+}
+
+#[test]
+fn active_and_closed_opening_treat_same_incomplete_tail_differently() {
+    todo!(
+        "Implement this test in this order:\n\
+         1. Build bytes containing one complete record followed by an incomplete prefix of the next record.\n\
+         2. Write identical bytes to two different temporary files.\n\
+         3. Open the first file through the closed/read-only API and assert that it fails without changing the bytes.\n\
+         4. Open the second file through the active API and assert that it succeeds.\n\
+         5. Assert that active recovery returns the offset after the complete record.\n\
+         6. Assert that the active file was truncated exactly to the complete record's encoded length.\n\
+         7. Scan the recovered active log and assert that it contains only the complete record."
+    )
 }

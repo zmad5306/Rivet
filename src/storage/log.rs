@@ -8,6 +8,12 @@ use std::io::{BufReader, Read, Write};
 use std::path::Path;
 use std::path::PathBuf;
 
+#[derive(Debug, PartialEq, Eq)]
+enum RecoveryMode {
+    Active,
+    Closed,
+}
+
 trait AppendIo: Write {
     fn sync_data(&self) -> std::io::Result<()>;
 }
@@ -215,7 +221,11 @@ impl Log {
         Ok(())
     }
 
-    fn recover(&mut self, base_offset: u64) -> Result<u64, StorageError> {
+    fn recover(
+        &mut self,
+        base_offset: u64,
+        recovery_mode: RecoveryMode,
+    ) -> Result<u64, StorageError> {
         let mut next_offset = base_offset;
         let mut bytes_read: usize = 0;
         let scanner = self.scan()?;
@@ -242,15 +252,20 @@ impl Log {
                         .ok_or(StorageError::Codec(CodecError::LengthOverflow))?;
                 }
                 Err(StorageError::Codec(
-                    CodecError::IncompleteHeader | CodecError::IncompleteBody,
-                )) => {
-                    let bytes_read_converted = match u64::try_from(bytes_read) {
-                        Ok(val) => val,
-                        Err(_) => return Err(StorageError::Codec(CodecError::LengthOverflow)),
-                    };
-                    self.file.set_len(bytes_read_converted)?;
-                    self.file.sync_data()?;
-                }
+                    error @ (CodecError::IncompleteHeader | CodecError::IncompleteBody),
+                )) => match recovery_mode {
+                    RecoveryMode::Active => {
+                        let bytes_read_converted = match u64::try_from(bytes_read) {
+                            Ok(val) => val,
+                            Err(_) => return Err(StorageError::Codec(CodecError::LengthOverflow)),
+                        };
+                        self.file.set_len(bytes_read_converted)?;
+                        self.file.sync_data()?;
+                    }
+                    RecoveryMode::Closed => {
+                        return Err(StorageError::Codec(error));
+                    }
+                },
                 Err(err) => return Err(err),
             }
         }
@@ -258,7 +273,7 @@ impl Log {
         Ok(next_offset)
     }
 
-    pub fn open(
+    pub fn open_active(
         path: &Path,
         base_offset: u64,
         limits: RecordLimits,
@@ -276,7 +291,31 @@ impl Log {
             append_failed: false,
         };
 
-        let next_offset = log.recover(base_offset)?;
+        let next_offset = log.recover(base_offset, RecoveryMode::Active)?;
+
+        Ok((log, next_offset))
+    }
+
+    pub fn open_closed(
+        path: &Path,
+        base_offset: u64,
+        limits: RecordLimits,
+    ) -> Result<(Self, u64), StorageError> {
+        let file = OpenOptions::new()
+            .create(false)
+            .append(false)
+            .write(false)
+            .read(true)
+            .open(path)?;
+
+        let mut log = Log {
+            file,
+            path: path.to_path_buf(),
+            limits,
+            append_failed: false,
+        };
+
+        let next_offset = log.recover(base_offset, RecoveryMode::Closed)?;
 
         Ok((log, next_offset))
     }
@@ -510,8 +549,8 @@ mod tests {
         let dir = tempfile::tempdir().expect("temporary directory should be created");
         let path = dir.path().join("failed-append.log");
 
-        let (mut log, _) =
-            Log::open(&path, 0, RecordLimits::default()).expect("opening the log should succeed");
+        let (mut log, _) = Log::open_active(&path, 0, RecordLimits::default())
+            .expect("opening the log should succeed");
 
         std::fs::write(&path, &writer.written)
             .expect("writing the simulated failed-append contents should succeed");
