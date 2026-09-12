@@ -1260,24 +1260,196 @@ fn recovery_rejects_offset_gaps_at_beginning_without_modifying_file() {
 
 #[test]
 fn recovery_rejects_duplicate_offsets_without_modifying_file() {
-    todo!(
-        "{}",
-        "Write validly encoded records with offsets 0 and 0. Opening must return UnexpectedOffset { expected: 1, actual: 0 } and leave all file bytes unchanged."
+    let record1 = sample_record(0);
+    let record1_bytes = record1
+        .encode(&RecordLimits::default())
+        .expect("encoding record1 should succeed");
+    let record2 = sample_record(0);
+    let record2_bytes = record2
+        .encode(&RecordLimits::default())
+        .expect("encoding record2 should succeed");
+
+    let dir = tempfile::tempdir().expect("temporary directory should be created");
+    let path = dir.path().join("duplicate_offsets.log");
+
+    let mut file = OpenOptions::new()
+        .append(true)
+        .create(true)
+        .open(&path)
+        .expect("opening the log file for appending should succeed");
+    file.write_all(&record1_bytes)
+        .expect("writing the first record bytes should succeed");
+    file.write_all(&record2_bytes)
+        .expect("writing the second record bytes should succeed");
+
+    drop(file);
+
+    let error = Log::open(&path, RecordLimits::default())
+        .expect_err("opening the log with offset gaps should fail");
+    let file_bytes = std::fs::read(&path).expect("reading the log file bytes should succeed");
+
+    assert!(
+        matches!(
+            error,
+            StorageError::UnexpectedOffset {
+                expected: 1,
+                actual: 0
+            }
+        ),
+        "error should be UnexpectedOffset with expected 1 and actual 0"
+    );
+    assert_eq!(
+        file_bytes,
+        [&record1_bytes[..], &record2_bytes[..]].concat(),
+        "file bytes should be unchanged after failing to open due to duplicate offsets"
     );
 }
 
 #[test]
 fn recovery_rejects_regressing_offsets_without_modifying_file() {
-    todo!(
-        "{}",
-        "Write validly encoded records with offsets 0, 1, and 0. Opening must return UnexpectedOffset { expected: 2, actual: 0 } and leave all file bytes unchanged."
+    let record1 = sample_record(0);
+    let record1_bytes = record1
+        .encode(&RecordLimits::default())
+        .expect("encoding record1 should succeed");
+    let record2 = sample_record(1);
+    let record2_bytes = record2
+        .encode(&RecordLimits::default())
+        .expect("encoding record2 should succeed");
+    let record3 = sample_record(0);
+    let record3_bytes = record3
+        .encode(&RecordLimits::default())
+        .expect("encoding record3 should succeed");
+
+    let dir = tempfile::tempdir().expect("temporary directory should be created");
+    let path = dir.path().join("regressing_offsets.log");
+
+    let mut file = OpenOptions::new()
+        .append(true)
+        .create(true)
+        .open(&path)
+        .expect("opening the log file for appending should succeed");
+    file.write_all(&record1_bytes)
+        .expect("writing the first record bytes should succeed");
+    file.write_all(&record2_bytes)
+        .expect("writing the second record bytes should succeed");
+    file.write_all(&record3_bytes)
+        .expect("writing the third record bytes should succeed");
+
+    drop(file);
+
+    let error = Log::open(&path, RecordLimits::default())
+        .expect_err("opening the log with regressing offsets should fail");
+    let file_bytes = std::fs::read(&path).expect("reading the log file bytes should succeed");
+
+    assert!(
+        matches!(
+            error,
+            StorageError::UnexpectedOffset {
+                expected: 2,
+                actual: 0
+            }
+        ),
+        "error should be UnexpectedOffset with expected 2 and actual 0"
+    );
+    assert_eq!(
+        file_bytes,
+        [&record1_bytes[..], &record2_bytes[..], &record3_bytes[..]].concat(),
+        "file bytes should be unchanged after failing to open due to regressing offsets"
     );
 }
 
 #[test]
-fn recovery_rejects_mid_log_corruption_without_modifying_file() {
-    todo!(
-        "{}",
-        "Place a complete malformed record between valid records. Cover invalid magic and a payload mutation causing InvalidChecksum. Opening must return the corresponding codec error and preserve the entire file, including records after the corruption."
+fn recovery_rejects_mid_log_invalid_magic_without_modifying_file() {
+    let record1 = sample_record(0);
+    let record1_bytes = record1
+        .encode(&RecordLimits::default())
+        .expect("encoding record1 should succeed");
+    let record2 = sample_record(1);
+    let record2_bytes = record2
+        .encode(&RecordLimits::default())
+        .expect("encoding record2 should succeed");
+    let record3 = sample_record(0);
+    let record3_bytes = record3
+        .encode(&RecordLimits::default())
+        .expect("encoding record3 should succeed");
+    let mut modified_record2_bytes = record2_bytes.clone();
+    modified_record2_bytes[0] ^= 0xFF;
+
+    let dir = tempfile::tempdir().expect("creating temp dir should succeed");
+    let path = dir.path().join("invalid_magic.log");
+    let mut file = std::fs::File::create(&path).expect("creating the log file should succeed");
+    file.write_all(&record1_bytes)
+        .expect("writing the first record bytes should succeed");
+    file.write_all(&modified_record2_bytes)
+        .expect("writing the modified second record bytes should succeed");
+    file.write_all(&record3_bytes)
+        .expect("writing the third record bytes should succeed");
+    drop(file);
+
+    let error = Log::open(&path, RecordLimits::default())
+        .expect_err("opening the log with invalid magic should fail");
+    let file_bytes = std::fs::read(&path).expect("reading the log file bytes should succeed");
+
+    assert!(
+        matches!(error, StorageError::Codec(CodecError::InvalidMagic)),
+        "error should be Codec(InvalidMagic)"
+    );
+    assert_eq!(
+        file_bytes,
+        [
+            &record1_bytes[..],
+            &modified_record2_bytes[..],
+            &record3_bytes[..]
+        ]
+        .concat(),
+        "file bytes should be unchanged after failing to open due to invalid magic"
+    );
+}
+
+#[test]
+fn recovery_rejects_mid_log_invalid_checksum_without_modifying_file() {
+    let record1 = sample_record(0);
+    let record1_bytes = record1
+        .encode(&RecordLimits::default())
+        .expect("encoding record1 should succeed");
+    let record2 = sample_record(1);
+    let record2_bytes = record2
+        .encode(&RecordLimits::default())
+        .expect("encoding record2 should succeed");
+    let record3 = sample_record(0);
+    let record3_bytes = record3
+        .encode(&RecordLimits::default())
+        .expect("encoding record3 should succeed");
+    let mut modified_record2_bytes = record2_bytes.clone();
+    modified_record2_bytes[10] ^= 0xFF; // Mutate the payload without changing the checksum
+
+    let dir = tempfile::tempdir().expect("creating temp dir should succeed");
+    let path = dir.path().join("invalid_checksum.log");
+    let mut file = std::fs::File::create(&path).expect("creating the log file should succeed");
+    file.write_all(&record1_bytes)
+        .expect("writing the first record bytes should succeed");
+    file.write_all(&modified_record2_bytes)
+        .expect("writing the modified second record bytes should succeed");
+    file.write_all(&record3_bytes)
+        .expect("writing the third record bytes should succeed");
+    drop(file);
+
+    let error = Log::open(&path, RecordLimits::default())
+        .expect_err("opening the log with invalid checksum should fail");
+    let file_bytes = std::fs::read(&path).expect("reading the log file bytes should succeed");
+
+    assert!(
+        matches!(error, StorageError::Codec(CodecError::InvalidChecksum)),
+        "error should be Codec(InvalidChecksum)"
+    );
+    assert_eq!(
+        file_bytes,
+        [
+            &record1_bytes[..],
+            &modified_record2_bytes[..],
+            &record3_bytes[..]
+        ]
+        .concat(),
+        "file bytes should be unchanged after failing to open due to invalid checksum"
     );
 }
