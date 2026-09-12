@@ -38,6 +38,8 @@ try {
     Invoke-Check -CargoArguments @('fmt', '--check')
     Invoke-Check -CargoArguments @('clippy', '--all-targets', '--', '-D', 'warnings')
     Invoke-Check -CargoArguments @('test')
+
+    Write-Host '✓ All checks passed.' -ForegroundColor Green
 } catch {
     [Console]::Error.WriteLine($_.ToString())
     exit 1

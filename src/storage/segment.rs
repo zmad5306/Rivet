@@ -200,12 +200,12 @@ mod tests {
     #[test]
     fn active_segment_exposes_supplied_metadata() {
         let dir = tempfile::tempdir().expect("temporary directory should be created");
-        let path = dir.path().join("00000000000000000042.log");
-        let (log, _) = Log::open(&path, RecordLimits::default())
+        let path = dir.path().join("00000000000000000000.log");
+        let (log, _) = Log::open(&path, 0, RecordLimits::default())
             .expect("opening a missing log path should succeed");
         let byte_len = read(&path).map(|b| b.len()).unwrap_or(0);
         let byte_length = u64::try_from(byte_len).expect("byte length should fit in u64");
-        let base_offset = 42;
+        let base_offset = 0;
         let metadata = SegmentMetadata::new(base_offset, &path, byte_length);
         let active_segment = ActiveSegment::new(metadata, log);
         let exposed_metadata = active_segment.metadata();

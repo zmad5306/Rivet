@@ -215,8 +215,8 @@ impl Log {
         Ok(())
     }
 
-    fn recover(&mut self) -> Result<u64, StorageError> {
-        let mut next_offset = 0;
+    fn recover(&mut self, base_offset: u64) -> Result<u64, StorageError> {
+        let mut next_offset = base_offset;
         let mut bytes_read: usize = 0;
         let scanner = self.scan()?;
 
@@ -258,7 +258,11 @@ impl Log {
         Ok(next_offset)
     }
 
-    pub fn open(path: &Path, limits: RecordLimits) -> Result<(Self, u64), StorageError> {
+    pub fn open(
+        path: &Path,
+        base_offset: u64,
+        limits: RecordLimits,
+    ) -> Result<(Self, u64), StorageError> {
         let file = OpenOptions::new()
             .create(true)
             .append(true)
@@ -272,7 +276,7 @@ impl Log {
             append_failed: false,
         };
 
-        let next_offset = log.recover()?;
+        let next_offset = log.recover(base_offset)?;
 
         Ok((log, next_offset))
     }
@@ -507,7 +511,7 @@ mod tests {
         let path = dir.path().join("failed-append.log");
 
         let (mut log, _) =
-            Log::open(&path, RecordLimits::default()).expect("opening the log should succeed");
+            Log::open(&path, 0, RecordLimits::default()).expect("opening the log should succeed");
 
         std::fs::write(&path, &writer.written)
             .expect("writing the simulated failed-append contents should succeed");
