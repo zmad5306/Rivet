@@ -284,20 +284,15 @@ fn scanning_one_record_preserves_all_fields() {
 #[test]
 fn scanning_many_records_preserves_offset_order_and_contents() {
     let records = vec![
-        // Absent key, empty payload.
         Record::new(0, 1_000, None, vec![]),
-        // Present but empty key, one-byte payload.
         Record::new(1, 1_001, Some(vec![]), vec![0x00]),
-        // Nonempty key, binary payload including invalid UTF-8.
         Record::new(
             2,
             1_002,
             Some(b"customer-123".to_vec()),
             vec![0x00, 0xFF, 0x80, 0x0A, 0x42],
         ),
-        // Absent key, larger payload containing every possible byte.
         Record::new(3, 1_003, None, (0u8..=255).collect()),
-        // Binary key, short payload after the larger record.
         Record::new(4, 1_004, Some(vec![0x00, 0xFE, 0x80]), vec![0xAB, 0xCD]),
     ];
     let dir = tempfile::tempdir().expect("temporary directory should be created");
@@ -573,7 +568,13 @@ fn opening_rejects_invalid_checksum_without_modifying_file() {
     );
 
     assert!(
-        matches!(error, StorageError::Codec(CodecError::InvalidChecksum)),
+        matches!(
+            error,
+            StorageError::CorruptRecord {
+                source: CodecError::InvalidChecksum,
+                ..
+            }
+        ),
         "opening should report CodecError::InvalidChecksum"
     );
 
@@ -589,6 +590,81 @@ fn opening_rejects_invalid_checksum_without_modifying_file() {
         std::fs::read(&path).expect("reading the corrupt file should succeed"),
         bytes,
         "failed recovery must leave the corrupt file unchanged"
+    );
+}
+
+#[test]
+fn first_corrupt_record_reports_path_and_byte_position_zero() {
+    let record = sample_record(0);
+    let mut record_bytes = record
+        .encode(&RecordLimits::default())
+        .expect("encoding the record should succeed");
+    let payload_start = record_bytes.len() - record.payload().len() - 4;
+    record_bytes[payload_start] ^= 0xFF; // Mutate the payload without changing the checksum
+
+    let dir = tempfile::tempdir().expect("temporary directory should be created");
+    let path = dir.path().join("corrupt.log");
+
+    write(&path, &record_bytes).expect("writing the corrupt record should succeed");
+
+    let error = Log::open(&path, RecordLimits::default())
+        .expect_err("opening a log with a corrupt record should fail");
+
+    assert!(
+        matches!(
+            &error,
+            StorageError::CorruptRecord {
+                source: CodecError::InvalidChecksum,
+                path: error_path,
+                byte_position: 0,
+            } if error_path == &path
+        ),
+        "expected a corrupt record error with an invalid checksum"
+    );
+}
+
+#[test]
+fn mid_log_corrupt_record_reports_path_and_record_start() {
+    let record1 = sample_record(0);
+    let record1_bytes = record1
+        .encode(&RecordLimits::default())
+        .expect("encoding the record should succeed");
+    let record2 = sample_record(1);
+    let mut record2_bytes = record2
+        .encode(&RecordLimits::default())
+        .expect("encoding the record should succeed");
+    let payload_start = record2_bytes.len() - record2.payload().len() - 4;
+    record2_bytes[payload_start] ^= 0xFF; // Mutate the payload without changing the checksum
+
+    let dir = tempfile::tempdir().expect("temporary directory should be created");
+    let path = dir.path().join("corrupt.log");
+
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .expect("opening the log for appending should succeed");
+    file.write_all(&record1_bytes)
+        .expect("writing the good record should succeed");
+    file.write_all(&record2_bytes)
+        .expect("writing the corrupt record should succeed");
+
+    let error = Log::open(&path, RecordLimits::default())
+        .expect_err("opening a log with a corrupt record should fail");
+
+    let expected_byte_position =
+        u64::try_from(record1_bytes.len()).expect("conversion should succeed");
+
+    assert!(
+        matches!(
+            &error,
+            StorageError::CorruptRecord {
+                source: CodecError::InvalidChecksum,
+                path: error_path,
+                byte_position: actual_byte_position,
+            } if error_path == &path && actual_byte_position == &expected_byte_position
+        ),
+        "expected a corrupt record error with an invalid checksum"
     );
 }
 
@@ -643,7 +719,6 @@ fn scanning_relative_path_survives_working_directory_change() {
     const DESTINATION: &str = "RIVET_CWD_TEST_DEST";
 
     if std::env::var_os(CHILD_MARKER).is_none() {
-        // The parent owns these directories until the child has exited.
         let original = tempfile::tempdir().expect("original directory should be created");
         let destination = tempfile::tempdir().expect("destination directory should be created");
         let destination_path = destination
@@ -651,8 +726,6 @@ fn scanning_relative_path_survives_working_directory_change() {
             .canonicalize()
             .expect("destination should have an absolute path");
 
-        // Re-run only this test in a separate process. The marker makes that
-        // invocation execute the assertions instead of spawning another child.
         let output = std::process::Command::new(
             std::env::current_exe().expect("test executable should be located"),
         )
@@ -683,7 +756,6 @@ fn scanning_relative_path_survives_working_directory_change() {
     log.append(&record)
         .expect("appending a record should succeed");
 
-    // Only the child changes directory, so parallel tests remain unaffected.
     let destination = std::env::var_os(DESTINATION).expect("parent should supply the destination");
     std::env::set_current_dir(destination).expect("changing directory should succeed");
 
@@ -1391,7 +1463,69 @@ fn recovery_rejects_mid_log_invalid_magic_without_modifying_file() {
     let file_bytes = std::fs::read(&path).expect("reading the log file bytes should succeed");
 
     assert!(
-        matches!(error, StorageError::Codec(CodecError::InvalidMagic)),
+        matches!(
+            error,
+            StorageError::CorruptRecord {
+                source: CodecError::InvalidMagic,
+                ..
+            }
+        ),
+        "opening should report CodecError::InvalidMagic"
+    );
+    assert_eq!(
+        file_bytes,
+        [
+            &record1_bytes[..],
+            &modified_record2_bytes[..],
+            &record3_bytes[..]
+        ]
+        .concat(),
+        "file bytes should be unchanged after failing to open due to invalid magic"
+    );
+}
+
+#[test]
+fn mid_log_invalid_magic_reports_context_and_source() {
+    let record1 = sample_record(0);
+    let record1_bytes = record1
+        .encode(&RecordLimits::default())
+        .expect("encoding record should succeed");
+    let record2 = sample_record(1);
+    let record2_bytes = record2
+        .encode(&RecordLimits::default())
+        .expect("encoding record2 should succeed");
+    let modified_record2_bytes = {
+        let mut bytes = record2_bytes.clone();
+        bytes[0] = 0; // Invalidate the magic byte
+        bytes
+    };
+    let record3 = sample_record(2);
+    let record3_bytes = record3
+        .encode(&RecordLimits::default())
+        .expect("encoding record3 should succeed");
+    let dir = tempfile::tempdir().expect("creating temp dir should succeed");
+    let path = dir.path().join("mid_log_invalid_magic.log");
+    let mut file = std::fs::File::create(&path).expect("creating the log file should succeed");
+    file.write_all(&record1_bytes)
+        .expect("writing the first record bytes should succeed");
+    file.write_all(&modified_record2_bytes)
+        .expect("writing the modified second record bytes should succeed");
+    file.write_all(&record3_bytes)
+        .expect("writing the third record bytes should succeed");
+    drop(file);
+
+    let error = Log::open(&path, RecordLimits::default())
+        .expect_err("opening the log with invalid magic should fail");
+    let file_bytes = std::fs::read(&path).expect("reading the log file bytes should succeed");
+
+    assert!(
+        matches!(
+            error,
+            StorageError::CorruptRecord {
+                source: CodecError::InvalidMagic,
+                ..
+            }
+        ),
         "error should be Codec(InvalidMagic)"
     );
     assert_eq!(
@@ -1404,6 +1538,31 @@ fn recovery_rejects_mid_log_invalid_magic_without_modifying_file() {
         .concat(),
         "file bytes should be unchanged after failing to open due to invalid magic"
     );
+
+    let mut asserted = false;
+
+    if let StorageError::CorruptRecord {
+        path: error_path,
+        byte_position,
+        source,
+    } = &error
+    {
+        assert_eq!(
+            error_path, &path,
+            "error path should match the expected path"
+        );
+        assert_eq!(
+            byte_position,
+            &(record1_bytes.len() as u64),
+            "byte position should point to the start of the corrupted record"
+        );
+        assert!(
+            matches!(source, CodecError::InvalidMagic),
+            "error source should be Codec(InvalidMagic)"
+        );
+        asserted = true;
+    }
+    assert!(asserted, "the error should have been asserted");
 }
 
 #[test]
@@ -1421,7 +1580,8 @@ fn recovery_rejects_mid_log_invalid_checksum_without_modifying_file() {
         .encode(&RecordLimits::default())
         .expect("encoding record3 should succeed");
     let mut modified_record2_bytes = record2_bytes.clone();
-    modified_record2_bytes[10] ^= 0xFF; // Mutate the payload without changing the checksum
+    let payload_start = record2_bytes.len() - record2.payload().len() - 4;
+    modified_record2_bytes[payload_start] ^= 0xFF; // Mutate the payload without changing the checksum
 
     let dir = tempfile::tempdir().expect("creating temp dir should succeed");
     let path = dir.path().join("invalid_checksum.log");
@@ -1439,7 +1599,13 @@ fn recovery_rejects_mid_log_invalid_checksum_without_modifying_file() {
     let file_bytes = std::fs::read(&path).expect("reading the log file bytes should succeed");
 
     assert!(
-        matches!(error, StorageError::Codec(CodecError::InvalidChecksum)),
+        matches!(
+            error,
+            StorageError::CorruptRecord {
+                source: CodecError::InvalidChecksum,
+                ..
+            }
+        ),
         "error should be Codec(InvalidChecksum)"
     );
     assert_eq!(

@@ -135,6 +135,10 @@ The fixed header is 30 bytes. Including the checksum, each record occupies `34 +
 
 The checksum is CRC32 over `version`, `offset`, `timestamp`, `key_presence`, `key_length`, `value_length`, `key`, and `payload`, in that order. It excludes the magic bytes and checksum field.
 
+#### Pre-release compatibility
+
+Milestone 7 does not require an on-disk migration. Records written by the completed milestone-06 implementation at commit `575aef6` already use the finalized version-1 field layout, big-endian encoding, and CRC32 range documented above. Milestone 7 strengthens corruption reporting and test coverage without changing encoded record bytes. Its contextual `CorruptRecord` storage error is an error-reporting change only and does not affect persisted data.
+
 Reading validates:
 
 1. magic bytes;
