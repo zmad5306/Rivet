@@ -1485,6 +1485,87 @@ fn recovery_rejects_mid_log_invalid_magic_without_modifying_file() {
 }
 
 #[test]
+fn mid_log_invalid_magic_reports_context_and_source() {
+    let record1 = sample_record(0);
+    let record1_bytes = record1
+        .encode(&RecordLimits::default())
+        .expect("encoding record should succeed");
+    let record2 = sample_record(1);
+    let record2_bytes = record2
+        .encode(&RecordLimits::default())
+        .expect("encoding record2 should succeed");
+    let modified_record2_bytes = {
+        let mut bytes = record2_bytes.clone();
+        bytes[0] = 0; // Invalidate the magic byte
+        bytes
+    };
+    let record3 = sample_record(2);
+    let record3_bytes = record3
+        .encode(&RecordLimits::default())
+        .expect("encoding record3 should succeed");
+    let dir = tempfile::tempdir().expect("creating temp dir should succeed");
+    let path = dir.path().join("mid_log_invalid_magic.log");
+    let mut file = std::fs::File::create(&path).expect("creating the log file should succeed");
+    file.write_all(&record1_bytes)
+        .expect("writing the first record bytes should succeed");
+    file.write_all(&modified_record2_bytes)
+        .expect("writing the modified second record bytes should succeed");
+    file.write_all(&record3_bytes)
+        .expect("writing the third record bytes should succeed");
+    drop(file);
+
+    let error = Log::open(&path, RecordLimits::default())
+        .expect_err("opening the log with invalid magic should fail");
+    let file_bytes = std::fs::read(&path).expect("reading the log file bytes should succeed");
+
+    assert!(
+        matches!(
+            error,
+            StorageError::CorruptRecord {
+                source: CodecError::InvalidMagic,
+                ..
+            }
+        ),
+        "error should be Codec(InvalidMagic)"
+    );
+    assert_eq!(
+        file_bytes,
+        [
+            &record1_bytes[..],
+            &modified_record2_bytes[..],
+            &record3_bytes[..]
+        ]
+        .concat(),
+        "file bytes should be unchanged after failing to open due to invalid magic"
+    );
+
+    let mut asserted = false;
+
+    if let StorageError::CorruptRecord {
+        path: error_path,
+        byte_position,
+        source,
+    } = &error
+    {
+        assert_eq!(
+            error_path, &path,
+            "error path should match the expected path"
+        );
+        assert_eq!(
+            byte_position,
+            &(record1_bytes.len() as u64),
+            "byte position should point to the start of the corrupted record"
+        );
+        assert!(
+            matches!(source, CodecError::InvalidMagic),
+            "error source should be Codec(InvalidMagic)"
+        );
+        asserted = true;
+    }
+    assert!(asserted, "the error should have been asserted");
+}
+
+#[test]
 fn recovery_rejects_mid_log_invalid_checksum_without_modifying_file() {
     let record1 = sample_record(0);
     let record1_bytes = record1

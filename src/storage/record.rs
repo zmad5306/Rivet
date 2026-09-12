@@ -1193,6 +1193,23 @@ mod tests {
     }
 
     #[test]
+    fn codec_decode_rejects_corruption_in_every_magic_byte() {
+        for n in 0..4 {
+            let record = sample_record(0);
+            let mut bytes = record
+                .encode(&RecordLimits::default())
+                .expect("record should encode successfully");
+            bytes[n] = 0;
+            let result = Record::decode(&bytes, &RecordLimits::default());
+            assert_eq!(
+                result,
+                Err(CodecError::InvalidMagic),
+                "codec decode rejects corruption in every magic byte: expected InvalidMagic for byte index {n}"
+            );
+        }
+    }
+
+    #[test]
     fn codec_decode_rejects_unsupported_version() {
         let offset: u64 = u64::MAX;
         let timestamp: u64 = u64::MAX;
