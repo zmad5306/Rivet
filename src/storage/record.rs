@@ -282,6 +282,7 @@ mod tests {
         include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/common/mod.rs"));
     }
     use common::sample_record;
+    use crc32fast::hash;
 
     #[test]
     fn record_constructor_preserves_all_fields() {
@@ -851,6 +852,9 @@ mod tests {
             0x00, 0x00, 0x00, 0x03, // Payload length: 3
             0xAA, 0xBB, // Key
             0x10, 0x20, 0x30, // Payload
+            // CRC32/IEEE independently calculated over the 31 bytes from version
+            // through payload using Python's zlib.crc32. The calculation excludes
+            // the magic bytes and checksum field and produces 0x67AF8074.
             0x67, 0xAF, 0x80, 0x74, // CRC32
         ];
 
@@ -863,6 +867,16 @@ mod tests {
         assert_eq!(
             bytes, expected_bytes,
             "encoding should match the specified version 1 wire format exactly"
+        );
+    }
+
+    #[test]
+    fn crc32_uses_expected_ieee_variant() {
+        let input = b"123456789";
+        let checksum = hash(input);
+        assert_eq!(
+            checksum, 0xCBF43926,
+            "CRC-32/IEEE of b\"123456789\" should match the expected fixed value"
         );
     }
 
