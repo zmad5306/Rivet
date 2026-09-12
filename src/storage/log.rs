@@ -6,6 +6,7 @@ use std::fs::File;
 use std::fs::OpenOptions;
 use std::io::{BufReader, Read, Write};
 use std::path::Path;
+use std::path::PathBuf;
 
 trait AppendIo: Write {
     fn sync_data(&self) -> std::io::Result<()>;
@@ -58,7 +59,9 @@ impl<'a> std::io::Read for Reader<'a> {
 
 pub struct LogScanner<'a> {
     reader: BufReader<Reader<'a>>,
+    path: &'a Path,
     limits: &'a RecordLimits,
+    byte_position: u64,
     finished: bool,
 }
 
@@ -69,6 +72,7 @@ impl LogScanner<'_> {
         }
 
         let mut header = [0u8; HEADER_LENGTH];
+        let record_start = self.byte_position;
 
         loop {
             match self.reader.read(&mut header[..1]) {
@@ -101,7 +105,11 @@ impl LogScanner<'_> {
             Ok(len) => len,
             Err(e) => {
                 self.finished = true;
-                return Err(StorageError::Codec(e));
+                return Err(StorageError::CorruptRecord {
+                    path: self.path.to_path_buf(),
+                    byte_position: record_start,
+                    source: e,
+                });
             }
         };
 
@@ -124,7 +132,27 @@ impl LogScanner<'_> {
             Ok((record, _)) => record,
             Err(e) => {
                 self.finished = true;
-                return Err(StorageError::Codec(e));
+                return Err(StorageError::CorruptRecord {
+                    path: self.path.to_path_buf(),
+                    byte_position: record_start,
+                    source: e,
+                });
+            }
+        };
+
+        let record_length = match u64::try_from(record_len) {
+            Ok(len) => len,
+            Err(_) => {
+                self.finished = true;
+                return Err(StorageError::Codec(CodecError::LengthOverflow));
+            }
+        };
+
+        self.byte_position = match self.byte_position.checked_add(record_length) {
+            Some(pos) => pos,
+            None => {
+                self.finished = true;
+                return Err(StorageError::Codec(CodecError::LengthOverflow));
             }
         };
 
@@ -147,6 +175,7 @@ impl Iterator for LogScanner<'_> {
 #[derive(Debug)]
 pub struct Log {
     file: File,
+    path: PathBuf,
     limits: RecordLimits,
     append_failed: bool,
 }
@@ -238,6 +267,7 @@ impl Log {
 
         let mut log = Log {
             file,
+            path: path.to_path_buf(),
             limits,
             append_failed: false,
         };
@@ -260,7 +290,9 @@ impl Log {
         let reader = Reader::new(&self.file);
         Ok(LogScanner {
             reader: BufReader::new(reader),
+            path: &self.path,
             limits: &self.limits,
+            byte_position: 0,
             finished: false,
         })
     }

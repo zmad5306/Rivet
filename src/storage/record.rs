@@ -787,8 +787,6 @@ mod tests {
         );
     }
 
-    // Codec exercises: replace todo!() as each test is implemented.
-
     #[test]
     fn codec_round_trip_preserves_record() {
         let offset: u64 = 0;
