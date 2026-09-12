@@ -107,3 +107,26 @@ impl std::error::Error for StorageError {
         }
     }
 }
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum ConfigurationError {
+    InvalidSegmentBytes { value: u64 },
+}
+
+impl std::fmt::Display for ConfigurationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ConfigurationError::InvalidSegmentBytes { value } => {
+                write!(f, "invalid segment bytes: {}", value)
+            }
+        }
+    }
+}
+
+impl std::error::Error for ConfigurationError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            ConfigurationError::InvalidSegmentBytes { .. } => None,
+        }
+    }
+}
