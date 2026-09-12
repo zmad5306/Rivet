@@ -60,6 +60,19 @@ impl Record {
         self.payload.as_ref()
     }
 
+    pub fn encoded_len(&self) -> Result<usize, CodecError> {
+        let key_len = self.key().map_or(0, |k| k.len());
+        let payload_len = self.payload().len();
+
+        let total_len = HEADER_LENGTH
+            .checked_add(key_len)
+            .and_then(|len| len.checked_add(payload_len))
+            .and_then(|len| len.checked_add(4)) // CRC32 checksum
+            .ok_or(CodecError::LengthOverflow)?;
+
+        Ok(total_len)
+    }
+
     fn check_len(len: usize, max: u32, error: CodecError) -> Result<u32, CodecError> {
         match u32::try_from(len) {
             Ok(l) => {
@@ -268,7 +281,7 @@ mod tests {
     mod common {
         include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/common/mod.rs"));
     }
-    use common::{record_with_fields, sample_record};
+    use common::sample_record;
 
     #[test]
     fn record_constructor_preserves_all_fields() {
@@ -279,7 +292,7 @@ mod tests {
         let payload: Vec<u8> = vec![1, 2, 3];
         let expected_payload: &[u8] = &[1, 2, 3];
 
-        let record = record_with_fields(offset, timestamp, key, payload);
+        let record = Record::new(offset, timestamp, key, payload);
 
         assert_eq!(
             record.offset(),
@@ -312,7 +325,7 @@ mod tests {
         let payload: Vec<u8> = vec![1, 2, 3];
         let expected_payload: &[u8] = &[1, 2, 3];
 
-        let record = record_with_fields(offset, timestamp, key, payload);
+        let record = Record::new(offset, timestamp, key, payload);
 
         assert_eq!(
             record.offset(),
@@ -345,7 +358,7 @@ mod tests {
         let payload: Vec<u8> = vec![1, 2, 3];
         let expected_payload: &[u8] = &[1, 2, 3];
 
-        let record = record_with_fields(offset, timestamp, key, payload);
+        let record = Record::new(offset, timestamp, key, payload);
 
         assert_eq!(
             record.offset(),
@@ -378,7 +391,7 @@ mod tests {
         let payload: Vec<u8> = vec![];
         let expected_payload: &[u8] = &[];
 
-        let record = record_with_fields(offset, timestamp, key, payload);
+        let record = Record::new(offset, timestamp, key, payload);
 
         assert_eq!(
             record.offset(),
@@ -411,7 +424,7 @@ mod tests {
         let payload: Vec<u8> = vec![0xFF, 0xFE, 0x00];
         let expected_payload: &[u8] = &[0xFF, 0xFE, 0x00];
 
-        let record = record_with_fields(offset, timestamp, key, payload);
+        let record = Record::new(offset, timestamp, key, payload);
 
         assert_eq!(
             record.offset(),
@@ -444,7 +457,7 @@ mod tests {
         let payload: Vec<u8> = vec![1, 2, 3];
         let expected_payload: &[u8] = &[1, 2, 3];
 
-        let record = record_with_fields(offset, timestamp, key, payload);
+        let record = Record::new(offset, timestamp, key, payload);
 
         assert_eq!(
             record.offset(),
@@ -477,7 +490,7 @@ mod tests {
         let payload: Vec<u8> = vec![1, 2, 3];
         let expected_payload: &[u8] = &[1, 2, 3];
 
-        let record = record_with_fields(offset, timestamp, key, payload);
+        let record = Record::new(offset, timestamp, key, payload);
 
         assert_eq!(
             record.offset(),
@@ -510,8 +523,8 @@ mod tests {
         let payload1: Vec<u8> = vec![1, 2, 3];
         let payload2: Vec<u8> = vec![1, 2, 3];
 
-        let record1 = record_with_fields(offset, timestamp, key1, payload1);
-        let record2 = record_with_fields(offset, timestamp, key2, payload2);
+        let record1 = Record::new(offset, timestamp, key1, payload1);
+        let record2 = Record::new(offset, timestamp, key2, payload2);
 
         assert_eq!(record1, record2, "identical fields should compare equal");
     }
@@ -526,8 +539,8 @@ mod tests {
         let payload1: Vec<u8> = vec![1, 2, 3];
         let payload2: Vec<u8> = vec![1, 2, 3];
 
-        let record1 = record_with_fields(offset1, timestamp, key1, payload1);
-        let record2 = record_with_fields(offset2, timestamp, key2, payload2);
+        let record1 = Record::new(offset1, timestamp, key1, payload1);
+        let record2 = Record::new(offset2, timestamp, key2, payload2);
 
         assert_ne!(
             record1, record2,
@@ -545,8 +558,8 @@ mod tests {
         let payload1: Vec<u8> = vec![1, 2, 3];
         let payload2: Vec<u8> = vec![1, 2, 3];
 
-        let record1 = record_with_fields(offset, timestamp1, key1, payload1);
-        let record2 = record_with_fields(offset, timestamp2, key2, payload2);
+        let record1 = Record::new(offset, timestamp1, key1, payload1);
+        let record2 = Record::new(offset, timestamp2, key2, payload2);
 
         assert_ne!(
             record1, record2,
@@ -563,8 +576,8 @@ mod tests {
         let payload1: Vec<u8> = vec![1, 2, 3];
         let payload2: Vec<u8> = vec![1, 2, 3];
 
-        let record1 = record_with_fields(offset, timestamp, key1, payload1);
-        let record2 = record_with_fields(offset, timestamp, key2, payload2);
+        let record1 = Record::new(offset, timestamp, key1, payload1);
+        let record2 = Record::new(offset, timestamp, key2, payload2);
 
         assert_ne!(
             record1, record2,
@@ -581,8 +594,8 @@ mod tests {
         let payload1: Vec<u8> = vec![1, 2, 3];
         let payload2: Vec<u8> = vec![2, 3, 4];
 
-        let record1 = record_with_fields(offset, timestamp, key1, payload1);
-        let record2 = record_with_fields(offset, timestamp, key2, payload2);
+        let record1 = Record::new(offset, timestamp, key1, payload1);
+        let record2 = Record::new(offset, timestamp, key2, payload2);
 
         assert_ne!(
             record1, record2,
@@ -599,8 +612,8 @@ mod tests {
         let payload1: Vec<u8> = vec![1, 2, 3];
         let payload2: Vec<u8> = vec![1, 2, 3];
 
-        let record1 = record_with_fields(offset, timestamp, key1, payload1);
-        let record2 = record_with_fields(offset, timestamp, key2, payload2);
+        let record1 = Record::new(offset, timestamp, key1, payload1);
+        let record2 = Record::new(offset, timestamp, key2, payload2);
 
         assert_ne!(
             record1, record2,
@@ -786,7 +799,7 @@ mod tests {
         let expected_payload: &[u8] = &[1, 2, 3];
         let limits = RecordLimits::default();
 
-        let record = record_with_fields(offset, timestamp, key, payload);
+        let record = Record::new(offset, timestamp, key, payload);
 
         let bytes = record
             .encode(&limits)
@@ -796,7 +809,7 @@ mod tests {
             Record::decode(&bytes, &limits).expect("record should decode successfully");
 
         assert_eq!(
-            record, record_from_bytes,
+            record_from_bytes, record,
             "decoded record should match its corresponding original record"
         );
         assert_eq!(
@@ -823,7 +836,7 @@ mod tests {
 
     #[test]
     fn codec_encoding_matches_golden_bytes() {
-        let record = record_with_fields(
+        let record = Record::new(
             0x0102030405060708,
             0x1112131415161718,
             Some(vec![0xAA, 0xBB]),
@@ -870,7 +883,7 @@ mod tests {
             .expect("record should encode successfully");
 
         assert_eq!(
-            bytes1, bytes2,
+            bytes2, bytes1,
             "encoding the same record twice should produce identical bytes"
         );
     }
@@ -882,7 +895,7 @@ mod tests {
         let key: Option<Vec<u8>> = None;
         let payload: Vec<u8> = vec![1, 2, 3];
         let limits = RecordLimits::default();
-        let record = record_with_fields(offset, timestamp, key, payload);
+        let record = Record::new(offset, timestamp, key, payload);
 
         let bytes = record
             .encode(&limits)
@@ -909,7 +922,7 @@ mod tests {
         let key: Option<Vec<u8>> = Some(vec![]);
         let payload: Vec<u8> = vec![1, 2, 3];
         let limits = RecordLimits::default();
-        let record = record_with_fields(offset, timestamp, key, payload);
+        let record = Record::new(offset, timestamp, key, payload);
 
         let bytes = record
             .encode(&limits)
@@ -936,7 +949,7 @@ mod tests {
         let key: Option<Vec<u8>> = Some(vec![]);
         let payload: Vec<u8> = vec![];
         let limits = RecordLimits::default();
-        let record = record_with_fields(offset, timestamp, key, payload);
+        let record = Record::new(offset, timestamp, key, payload);
 
         let bytes = record
             .encode(&limits)
@@ -963,7 +976,7 @@ mod tests {
         let key: Option<Vec<u8>> = Some(vec![]);
         let payload: Vec<u8> = vec![0x00, 0x80, 0xFF];
         let limits = RecordLimits::default();
-        let record = record_with_fields(offset, timestamp, key, payload);
+        let record = Record::new(offset, timestamp, key, payload);
 
         let bytes = record
             .encode(&limits)
@@ -985,7 +998,7 @@ mod tests {
         let key: Option<Vec<u8>> = Some(vec![]);
         let payload: Vec<u8> = vec![];
         let limits = RecordLimits::default();
-        let record = record_with_fields(offset, timestamp, key, payload);
+        let record = Record::new(offset, timestamp, key, payload);
 
         let bytes = record
             .encode(&limits)
@@ -1012,7 +1025,7 @@ mod tests {
         let key: Option<Vec<u8>> = Some(vec![]);
         let payload: Vec<u8> = vec![];
         let limits = RecordLimits::default();
-        let record = record_with_fields(offset, timestamp, key, payload);
+        let record = Record::new(offset, timestamp, key, payload);
 
         let bytes = record
             .encode(&limits)
@@ -1038,14 +1051,14 @@ mod tests {
         let timestamp1: u64 = 0;
         let key1: Option<Vec<u8>> = Some(vec![]);
         let payload1: Vec<u8> = vec![];
-        let record1 = record_with_fields(offset1, timestamp1, key1, payload1);
+        let record1 = Record::new(offset1, timestamp1, key1, payload1);
 
         let offset2: u64 = u64::MAX;
         let timestamp2: u64 = u64::MAX;
         let key2: Option<Vec<u8>> = Some(vec![]);
         let payload2: Vec<u8> = vec![];
         let limits = RecordLimits::default();
-        let record2 = record_with_fields(offset2, timestamp2, key2, payload2);
+        let record2 = Record::new(offset2, timestamp2, key2, payload2);
 
         let bytes1 = record1
             .encode(&limits)
@@ -1085,7 +1098,7 @@ mod tests {
         let key: Option<Vec<u8>> = Some(vec![]);
         let payload: Vec<u8> = vec![];
         let limits = RecordLimits::default();
-        let record = record_with_fields(offset, timestamp, key, payload);
+        let record = Record::new(offset, timestamp, key, payload);
 
         let bytes = record
             .encode(&limits)
@@ -1109,7 +1122,7 @@ mod tests {
         let key: Option<Vec<u8>> = Some(vec![1, 2, 3]);
         let payload: Vec<u8> = vec![1, 2, 3];
         let limits = RecordLimits::default();
-        let record = record_with_fields(offset, timestamp, key, payload);
+        let record = Record::new(offset, timestamp, key, payload);
 
         let bytes = record
             .encode(&limits)
@@ -1141,7 +1154,7 @@ mod tests {
         let key: Option<Vec<u8>> = Some(vec![]);
         let payload: Vec<u8> = vec![];
         let limits = RecordLimits::default();
-        let record = record_with_fields(offset, timestamp, key, payload);
+        let record = Record::new(offset, timestamp, key, payload);
 
         let bytes = record
             .encode(&limits)
@@ -1165,7 +1178,7 @@ mod tests {
         let key: Option<Vec<u8>> = Some(vec![]);
         let payload: Vec<u8> = vec![];
         let limits = RecordLimits::default();
-        let record = record_with_fields(offset, timestamp, key, payload);
+        let record = Record::new(offset, timestamp, key, payload);
 
         let mut bytes = record
             .encode(&limits)
@@ -1188,7 +1201,7 @@ mod tests {
         let key: Option<Vec<u8>> = Some(vec![]);
         let payload: Vec<u8> = vec![];
         let limits = RecordLimits::default();
-        let record = record_with_fields(offset, timestamp, key, payload);
+        let record = Record::new(offset, timestamp, key, payload);
 
         let mut bytes = record
             .encode(&limits)
@@ -1211,7 +1224,7 @@ mod tests {
         let key: Option<Vec<u8>> = Some(vec![]);
         let payload: Vec<u8> = vec![];
         let limits = RecordLimits::default();
-        let record = record_with_fields(offset, timestamp, key, payload);
+        let record = Record::new(offset, timestamp, key, payload);
 
         let mut bytes = record
             .encode(&limits)
@@ -1235,7 +1248,7 @@ mod tests {
         let key: Option<Vec<u8>> = Some(vec![1, 2, 3]);
         let payload: Vec<u8> = vec![];
         let limits = RecordLimits::default();
-        let record = record_with_fields(offset, timestamp, key, payload);
+        let record = Record::new(offset, timestamp, key, payload);
 
         let mut bytes = record
             .encode(&limits)
@@ -1258,7 +1271,7 @@ mod tests {
         let key: Option<Vec<u8>> = Some(vec![1, 2]);
         let payload: Vec<u8> = vec![1, 2, 3];
         let limits = RecordLimits::new(2, 3);
-        let record = record_with_fields(offset, timestamp, key, payload);
+        let record = Record::new(offset, timestamp, key, payload);
 
         let bytes = record
             .encode(&limits)
@@ -1268,7 +1281,7 @@ mod tests {
             Record::decode(&bytes, &limits).expect("record should decode successfully");
 
         assert_eq!(
-            record, record_from_bytes,
+            record_from_bytes, record,
             "decoded record should match its corresponding original record"
         );
     }
@@ -1280,7 +1293,7 @@ mod tests {
         let key: Option<Vec<u8>> = Some(vec![1, 2, 3]);
         let payload: Vec<u8> = vec![1, 2, 3];
         let limits = RecordLimits::new(2, 3);
-        let record = record_with_fields(offset, timestamp, key, payload);
+        let record = Record::new(offset, timestamp, key, payload);
 
         let result = record.encode(&limits);
 
@@ -1298,7 +1311,7 @@ mod tests {
         let key: Option<Vec<u8>> = Some(vec![1, 2]);
         let payload: Vec<u8> = vec![1, 2, 3, 4];
         let limits = RecordLimits::new(2, 3);
-        let record = record_with_fields(offset, timestamp, key, payload);
+        let record = Record::new(offset, timestamp, key, payload);
 
         let result = record.encode(&limits);
 
@@ -1316,7 +1329,7 @@ mod tests {
         let key: Option<Vec<u8>> = Some(vec![]);
         let payload: Vec<u8> = vec![];
         let limits = RecordLimits::new(2, 3);
-        let record = record_with_fields(offset, timestamp, key, payload);
+        let record = Record::new(offset, timestamp, key, payload);
 
         let mut bytes = record
             .encode(&limits)
@@ -1341,7 +1354,7 @@ mod tests {
         let key: Option<Vec<u8>> = Some(vec![]);
         let payload: Vec<u8> = vec![];
         let limits = RecordLimits::new(2, 3);
-        let record = record_with_fields(offset, timestamp, key, payload);
+        let record = Record::new(offset, timestamp, key, payload);
 
         let mut bytes = record
             .encode(&limits)
@@ -1365,7 +1378,7 @@ mod tests {
         let key: Option<Vec<u8>> = Some(vec![]);
         let payload: Vec<u8> = vec![1, 2, 3];
         let limits = RecordLimits::new(2, 3);
-        let record = record_with_fields(offset, timestamp, key, payload);
+        let record = Record::new(offset, timestamp, key, payload);
 
         let mut bytes = record
             .encode(&limits)
@@ -1388,7 +1401,7 @@ mod tests {
         let key: Option<Vec<u8>> = Some(vec![]);
         let payload: Vec<u8> = vec![1, 2, 3];
         let limits = RecordLimits::new(2, 3);
-        let record = record_with_fields(offset, timestamp, key, payload);
+        let record = Record::new(offset, timestamp, key, payload);
 
         let mut bytes = record
             .encode(&limits)
@@ -1428,7 +1441,7 @@ mod tests {
         let key: Option<Vec<u8>> = Some(vec![]);
         let payload: Vec<u8> = vec![];
         let limits = RecordLimits::new(u32::MAX, u32::MAX);
-        let record = record_with_fields(offset, timestamp, key, payload);
+        let record = Record::new(offset, timestamp, key, payload);
 
         let mut bytes = record
             .encode(&limits)

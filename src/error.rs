@@ -42,6 +42,8 @@ pub enum StorageError {
     Codec(CodecError),
     Io(std::io::Error),
     AppendDisabled,
+    OffsetOverflow,
+    UnexpectedOffset { expected: u64, actual: u64 },
 }
 
 impl From<CodecError> for StorageError {
@@ -62,6 +64,12 @@ impl std::fmt::Display for StorageError {
             StorageError::Codec(err) => write!(f, "codec error: {}", err),
             StorageError::Io(err) => write!(f, "io error: {}", err),
             StorageError::AppendDisabled => write!(f, "append disabled"),
+            StorageError::OffsetOverflow => write!(f, "offset overflow"),
+            StorageError::UnexpectedOffset { expected, actual } => write!(
+                f,
+                "unexpected offset: expected {}, actual {}",
+                expected, actual
+            ),
         }
     }
 }
@@ -72,6 +80,8 @@ impl std::error::Error for StorageError {
             StorageError::Codec(err) => Some(err),
             StorageError::Io(err) => Some(err),
             StorageError::AppendDisabled => None,
+            StorageError::OffsetOverflow => None,
+            StorageError::UnexpectedOffset { .. } => None,
         }
     }
 }
