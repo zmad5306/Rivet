@@ -282,6 +282,7 @@ mod tests {
         include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/common/mod.rs"));
     }
     use common::sample_record;
+    use crc32fast::hash;
 
     #[test]
     fn record_constructor_preserves_all_fields() {
@@ -787,8 +788,6 @@ mod tests {
         );
     }
 
-    // Codec exercises: replace todo!() as each test is implemented.
-
     #[test]
     fn codec_round_trip_preserves_record() {
         let offset: u64 = 0;
@@ -853,6 +852,9 @@ mod tests {
             0x00, 0x00, 0x00, 0x03, // Payload length: 3
             0xAA, 0xBB, // Key
             0x10, 0x20, 0x30, // Payload
+            // CRC32/IEEE independently calculated over the 31 bytes from version
+            // through payload using Python's zlib.crc32. The calculation excludes
+            // the magic bytes and checksum field and produces 0x67AF8074.
             0x67, 0xAF, 0x80, 0x74, // CRC32
         ];
 
@@ -865,6 +867,16 @@ mod tests {
         assert_eq!(
             bytes, expected_bytes,
             "encoding should match the specified version 1 wire format exactly"
+        );
+    }
+
+    #[test]
+    fn crc32_uses_expected_ieee_variant() {
+        let input = b"123456789";
+        let checksum = hash(input);
+        assert_eq!(
+            checksum, 0xCBF43926,
+            "CRC-32/IEEE of b\"123456789\" should match the expected fixed value"
         );
     }
 
@@ -1195,6 +1207,23 @@ mod tests {
     }
 
     #[test]
+    fn codec_decode_rejects_corruption_in_every_magic_byte() {
+        for n in 0..4 {
+            let record = sample_record(0);
+            let mut bytes = record
+                .encode(&RecordLimits::default())
+                .expect("record should encode successfully");
+            bytes[n] = 0;
+            let result = Record::decode(&bytes, &RecordLimits::default());
+            assert_eq!(
+                result,
+                Err(CodecError::InvalidMagic),
+                "codec decode rejects corruption in every magic byte: expected InvalidMagic for byte index {n}"
+            );
+        }
+    }
+
+    #[test]
     fn codec_decode_rejects_unsupported_version() {
         let offset: u64 = u64::MAX;
         let timestamp: u64 = u64::MAX;
@@ -1391,6 +1420,114 @@ mod tests {
             result,
             Err(CodecError::InvalidChecksum),
             "codec decode rejects corrupted payload: expected InvalidChecksum"
+        );
+    }
+
+    #[test]
+    fn codec_decode_rejects_corrupted_offset() {
+        for n in 5..13 {
+            let record = sample_record(0);
+            let mut bytes = record
+                .encode(&RecordLimits::default())
+                .expect("encoding should succeed");
+            bytes[n] ^= 0xFF;
+            let error =
+                Record::decode(&bytes, &RecordLimits::default()).expect_err("decoding should fail");
+            assert_eq!(
+                error,
+                CodecError::InvalidChecksum,
+                "codec decode rejects corrupted offset: expected InvalidChecksum"
+            );
+        }
+    }
+
+    #[test]
+    fn codec_decode_rejects_corrupted_timestamp() {
+        for n in 13..21 {
+            let record = sample_record(0);
+            let mut bytes = record
+                .encode(&RecordLimits::default())
+                .expect("encoding should succeed");
+            bytes[n] ^= 0xFF;
+            let error =
+                Record::decode(&bytes, &RecordLimits::default()).expect_err("decoding should fail");
+            assert_eq!(
+                error,
+                CodecError::InvalidChecksum,
+                "codec decode rejects corrupted timestamp: expected InvalidChecksum"
+            );
+        }
+    }
+
+    #[test]
+    fn codec_decode_rejects_corrupted_valid_key_presence() {
+        let record = Record::new(0, 1_700_000_000, Some(vec![]), vec![1, 2, 3]);
+        let mut bytes = record
+            .encode(&RecordLimits::default())
+            .expect("encoding should succeed");
+        bytes[21] = 0;
+        let error =
+            Record::decode(&bytes, &RecordLimits::default()).expect_err("decoding should fail");
+        assert_eq!(
+            error,
+            CodecError::InvalidChecksum,
+            "codec decode rejects corrupted valid key presence: expected InvalidChecksum"
+        );
+    }
+
+    #[test]
+    fn codec_decode_rejects_corrupted_key_length() {
+        let record = sample_record(0);
+        let mut bytes = record
+            .encode(&RecordLimits::default())
+            .expect("encoding should succeed");
+        let encoded_key_len = bytes[22..26]
+            .try_into()
+            .map(u32::from_be_bytes)
+            .expect("slice with incorrect length");
+        bytes[22..26].copy_from_slice(&(encoded_key_len - 1).to_be_bytes());
+        let error =
+            Record::decode(&bytes, &RecordLimits::default()).expect_err("decoding should fail");
+        assert_eq!(
+            error,
+            CodecError::InvalidChecksum,
+            "codec decode rejects corrupted key length: expected InvalidChecksum"
+        );
+    }
+
+    #[test]
+    fn codec_decode_rejects_corrupted_payload_length() {
+        let record = sample_record(0);
+        let mut bytes = record
+            .encode(&RecordLimits::default())
+            .expect("encoding should succeed");
+        let encoded_payload_len = bytes[26..30]
+            .try_into()
+            .map(u32::from_be_bytes)
+            .expect("slice with incorrect length");
+        bytes[26..30].copy_from_slice(&(encoded_payload_len - 1).to_be_bytes());
+        let error =
+            Record::decode(&bytes, &RecordLimits::default()).expect_err("decoding should fail");
+        assert_eq!(
+            error,
+            CodecError::InvalidChecksum,
+            "codec decode rejects corrupted payload length: expected InvalidChecksum"
+        );
+    }
+
+    #[test]
+    fn codec_decode_rejects_corrupted_key() {
+        let record = sample_record(0);
+        let mut bytes = record
+            .encode(&RecordLimits::default())
+            .expect("encoding should succeed");
+        bytes[30] ^= 0xFF; // Corrupt a key byte
+        let error =
+            Record::decode(&bytes, &RecordLimits::default()).expect_err("decoding should fail");
+        assert_eq!(
+            error,
+            CodecError::InvalidChecksum,
+            "codec decode rejects corrupted key: expected InvalidChecksum"
         );
     }
 

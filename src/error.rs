@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum PartitionError {
     OffsetOverflow,
@@ -43,7 +45,15 @@ pub enum StorageError {
     Io(std::io::Error),
     AppendDisabled,
     OffsetOverflow,
-    UnexpectedOffset { expected: u64, actual: u64 },
+    UnexpectedOffset {
+        expected: u64,
+        actual: u64,
+    },
+    CorruptRecord {
+        path: PathBuf,
+        byte_position: u64,
+        source: CodecError,
+    },
 }
 
 impl From<CodecError> for StorageError {
@@ -70,6 +80,17 @@ impl std::fmt::Display for StorageError {
                 "unexpected offset: expected {}, actual {}",
                 expected, actual
             ),
+            StorageError::CorruptRecord {
+                path,
+                byte_position,
+                source,
+            } => write!(
+                f,
+                "corrupt record in {} at byte {}: {}",
+                path.display(),
+                byte_position,
+                source
+            ),
         }
     }
 }
@@ -82,6 +103,7 @@ impl std::error::Error for StorageError {
             StorageError::AppendDisabled => None,
             StorageError::OffsetOverflow => None,
             StorageError::UnexpectedOffset { .. } => None,
+            StorageError::CorruptRecord { source, .. } => Some(source),
         }
     }
 }
