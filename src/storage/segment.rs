@@ -168,7 +168,7 @@ mod tests {
     use std::{fs::read, path::Path};
 
     use crate::{
-        error::ConfigurationError,
+        error::{ConfigurationError, StorageError},
         storage::{
             log::Log,
             record::RecordLimits,
@@ -286,5 +286,159 @@ mod tests {
             byte_length,
             "ActiveSegment should expose the correct byte length"
         );
+    }
+
+    #[test]
+    fn segment_filename_formats_canonical_boundary_offsets() {
+        let filename = SegmentMetadata::filename(0);
+        assert_eq!(
+            filename, "00000000000000000000.log",
+            "Filename for offset 0 should be canonical"
+        );
+
+        let filename = SegmentMetadata::filename(42);
+        assert_eq!(
+            filename, "00000000000000000042.log",
+            "Filename for offset 42 should be canonical"
+        );
+
+        let filename = SegmentMetadata::filename(u64::MAX);
+        assert_eq!(
+            filename, "18446744073709551615.log",
+            "Filename for offset u64::MAX should be canonical"
+        );
+    }
+
+    #[test]
+    fn segment_filename_parser_accepts_canonical_boundary_offsets() {
+        let path = Path::new("00000000000000000000.log");
+        let offset =
+            SegmentMetadata::parse_base_offset(path).expect("Parsing base offset should succeed");
+        assert_eq!(
+            offset, 0,
+            "Parsed offset should match the value encoded in the filename"
+        );
+
+        let path = Path::new("00000000000000000042.log");
+        let offset =
+            SegmentMetadata::parse_base_offset(path).expect("Parsing base offset should succeed");
+        assert_eq!(
+            offset, 42,
+            "Parsed offset should match the value encoded in the filename"
+        );
+
+        let path = Path::new("18446744073709551615.log");
+        let offset =
+            SegmentMetadata::parse_base_offset(path).expect("Parsing base offset should succeed");
+        assert_eq!(
+            offset,
+            u64::MAX,
+            "Parsed offset should match the value encoded in the filename"
+        );
+
+        let path = Path::new("parent_dir/00000000000000000042.log");
+        let offset =
+            SegmentMetadata::parse_base_offset(path).expect("Parsing base offset should succeed");
+        assert_eq!(
+            offset, 42,
+            "Parsed offset should match the value encoded in the filename"
+        );
+    }
+
+    #[test]
+    fn segment_filename_format_and_parse_round_trip() {
+        let offsets = [0, 1, 42, 123456789, u64::MAX];
+        for &offset in &offsets {
+            let filename = SegmentMetadata::filename(offset);
+            let path = Path::new(&filename);
+            let parsed_offset = SegmentMetadata::parse_base_offset(path)
+                .expect("Parsing base offset should succeed");
+            assert_eq!(
+                parsed_offset, offset,
+                "Parsed offset should match the original offset {}",
+                offset
+            );
+        }
+    }
+
+    #[test]
+    fn segment_filename_parser_rejects_noncanonical_names_and_preserves_path() {
+        let invalid_filenames = [
+            "42.log",
+            "00000000000000000042",
+            "00000000000000000042.txt",
+            "00000000000000000042.log.log",
+            "+0000000000000000042.log",
+            "0000000000000000004x.log",
+        ];
+
+        for &filename in &invalid_filenames {
+            let path = Path::new("parent_dir").join(filename);
+            match SegmentMetadata::parse_base_offset(&path) {
+                Ok(_) => panic!(
+                    "Parsing should have failed for invalid filename: {}",
+                    filename
+                ),
+                Err(StorageError::InvalidSegmentFilename { path: err_path }) => {
+                    assert_eq!(
+                        err_path, path,
+                        "Error should retain the complete supplied path for filename: {}",
+                        filename
+                    );
+                }
+                Err(err) => panic!("Unexpected error type for filename {}: {:?}", filename, err),
+            }
+        }
+    }
+
+    #[test]
+    fn segment_filename_parser_rejects_path_without_filename() {
+        let path = Path::new("/");
+        match SegmentMetadata::parse_base_offset(path) {
+            Ok(_) => panic!(
+                "Parsing should have failed for path without filename: {:?}",
+                path
+            ),
+            Err(StorageError::InvalidSegmentFilename { path: err_path }) => {
+                assert_eq!(
+                    err_path, path,
+                    "Error should retain the complete supplied path for path without filename: {:?}",
+                    path
+                );
+            }
+            Err(err) => panic!(
+                "Unexpected error type for path without filename {:?}: {:?}",
+                path, err
+            ),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn segment_filename_parser_rejects_non_utf8_filename() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+
+        let invalid_bytes = b"00000000000000000042\xFF.log";
+        let os_string = OsString::from_vec(invalid_bytes.to_vec());
+        let path = Path::new("parent_dir").join(&os_string);
+
+        match SegmentMetadata::parse_base_offset(&path) {
+            Ok(_) => panic!(
+                "Parsing should have failed for non-UTF-8 filename: {:?}",
+                path
+            ),
+            Err(StorageError::InvalidSegmentFilename { path: err_path }) => {
+                assert_eq!(
+                    err_path, path,
+                    "Error should retain the complete supplied path for non-UTF-8 filename: {:?}",
+                    path
+                );
+            }
+            Err(err) => panic!(
+                "Unexpected error type for non-UTF-8 filename {:?}: {:?}",
+                path, err
+            ),
+        }
     }
 }
