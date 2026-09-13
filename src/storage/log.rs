@@ -339,6 +339,14 @@ impl Log {
             finished: false,
         })
     }
+
+    pub fn len(&self) -> Result<u64, StorageError> {
+        Ok(self.file.metadata()?.len())
+    }
+
+    pub fn is_empty(&self) -> Result<bool, StorageError> {
+        Ok(self.len()? == 0)
+    }
 }
 
 #[cfg(test)]

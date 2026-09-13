@@ -1,4 +1,5 @@
 use std::{
+    fs::{create_dir_all, read_dir},
     num::NonZeroU64,
     path::{Path, PathBuf},
 };
@@ -166,6 +167,13 @@ impl ActiveSegment {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct SegmentCandidate {
+    base_offset: u64,
+    path: PathBuf,
+    byte_len: u64,
+}
+
 #[derive(Debug)]
 pub struct SegmentedLog {
     directory: PathBuf,
@@ -180,20 +188,116 @@ impl SegmentedLog {
     pub fn directory(&self) -> &Path {
         self.directory.as_path()
     }
+
     pub fn closed_segments(&self) -> &[ClosedSegment] {
         &self.closed_segments
     }
+
     pub fn active_segment(&self) -> &ActiveSegment {
         &self.active_segment
     }
+
     pub fn next_offset(&self) -> u64 {
         self.next_offset
     }
+
     pub fn limits(&self) -> RecordLimits {
         self.limits
     }
+
     pub fn config(&self) -> &SegmentConfig {
         &self.config
+    }
+
+    fn discover_segments(directory: &Path) -> Result<Vec<SegmentCandidate>, StorageError> {
+        create_dir_all(directory)?;
+        let mut candidates = Vec::new();
+        for entry in read_dir(directory)? {
+            let dir_entry = entry?;
+            let path = dir_entry.path();
+            let file_type = dir_entry.file_type()?;
+
+            if !file_type.is_file() {
+                return Err(StorageError::UnexpectedSegmentEntry { path });
+            }
+
+            let base_offset = SegmentMetadata::parse_base_offset(&path)?;
+            let byte_len = dir_entry.metadata()?.len();
+
+            candidates.push(SegmentCandidate {
+                base_offset,
+                path,
+                byte_len,
+            });
+        }
+
+        candidates.sort_by_key(|candidate| candidate.base_offset);
+
+        for pair in candidates.windows(2) {
+            let current = &pair[0];
+            let next = &pair[1];
+            if current.base_offset == next.base_offset {
+                return Err(StorageError::DuplicateSegmentBaseOffset {
+                    base_offset: current.base_offset,
+                    first_path: current.path.clone(),
+                    second_path: next.path.clone(),
+                });
+            }
+        }
+
+        Ok(candidates)
+    }
+
+    pub fn open(
+        directory: &Path,
+        limits: RecordLimits,
+        config: SegmentConfig,
+    ) -> Result<Self, StorageError> {
+        let mut candidates = Self::discover_segments(directory)?;
+        if candidates.is_empty() {
+            let file_name = SegmentMetadata::filename(0);
+            let path = directory.join(&file_name);
+            let (log, next_offset) = Log::open_active(&path, 0, limits)?;
+            let metadata = SegmentMetadata::new(0, &path, 0);
+
+            return Ok(Self {
+                directory: directory.to_path_buf(),
+                limits,
+                config,
+                active_segment: ActiveSegment { log, metadata },
+                closed_segments: Vec::new(),
+                next_offset,
+            });
+        }
+
+        let active_candidate = candidates
+            .pop()
+            .expect("There should be at least one candidate");
+        let (log, next_offset) =
+            Log::open_active(&active_candidate.path, active_candidate.base_offset, limits)?;
+        let metadata = SegmentMetadata::new(
+            active_candidate.base_offset,
+            &active_candidate.path,
+            log.len()?,
+        );
+        let mut closed_segments = vec![];
+
+        for candidate in candidates {
+            let (log, _) = Log::open_closed(&candidate.path, candidate.base_offset, limits)?;
+            let byte_len = log.len()?;
+            let metadata = SegmentMetadata::new(candidate.base_offset, &candidate.path, byte_len);
+            let closed_segment = ClosedSegment { metadata, log };
+            closed_segments.push(closed_segment);
+        }
+
+        Ok(Self {
+            directory: directory.to_path_buf(),
+            limits,
+            config,
+            active_segment: ActiveSegment { log, metadata },
+            closed_segments,
+            next_offset,
+        })
     }
 }
 
