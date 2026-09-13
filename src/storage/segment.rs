@@ -680,81 +680,188 @@ mod tests {
 
     #[test]
     fn segmented_log_open_creates_missing_directory_and_initial_active_segment() {
-        todo!(
-            "Implement this test by:\n\
-             1. Create a temporary parent directory and join a child partition path that does not exist.\n\
-             2. Assert that the partition path does not exist before opening it.\n\
-             3. Open SegmentedLog with default record limits and segment configuration.\n\
-             4. Assert that the partition directory and canonical offset-zero log file now exist.\n\
-             5. Assert that there are no closed segments.\n\
-             6. Assert that the active segment has base offset 0, the canonical path, and byte length 0.\n\
-             7. Assert that next_offset is 0 and the supplied limits and configuration are preserved."
+        let base_offset = 0;
+        let dir = tempfile::tempdir().expect("failed to create temporary directory");
+        let path = dir.path().join(SegmentMetadata::filename(base_offset));
+
+        assert!(
+            !path.exists(),
+            "the segment path should not exist before opening the segmented log"
         );
+
+        let segmented_log = SegmentedLog::open(
+            dir.path(),
+            RecordLimits::default(),
+            SegmentConfig::default(),
+        )
+        .expect("failed to open segmented log");
+
+        assert!(
+            path.exists(),
+            "the segment path should exist after opening the segmented log"
+        );
+        assert!(
+            segmented_log.closed_segments().is_empty(),
+            "there should be no closed segments initially"
+        );
+
+        let active_segment = segmented_log.active_segment();
+        assert_eq!(active_segment.metadata().base_offset(), 0);
+        assert_eq!(active_segment.metadata().path(), path);
+        assert_eq!(active_segment.metadata().byte_len(), 0);
+
+        assert_eq!(segmented_log.next_offset(), 0);
+        assert_eq!(segmented_log.limits(), RecordLimits::default());
+        assert_eq!(segmented_log.config(), &SegmentConfig::default());
     }
 
     #[test]
     fn segment_discovery_sorts_candidates_by_numeric_base_offset() {
-        todo!(
-            "Implement this test by:\n\
-             1. Create a temporary directory.\n\
-             2. Create empty canonical segment files for offsets 100, 2, and 42 in deliberately scrambled order.\n\
-             3. Call SegmentedLog::discover_segments on the directory.\n\
-             4. Map the returned candidates to their base offsets.\n\
-             5. Assert that the offsets are ordered numerically as [2, 42, 100].\n\
-             6. Assert that each candidate preserves its complete path and reports byte length 0."
-        );
+        let base_offset_100 = 100;
+        let base_offset_2 = 2;
+        let base_offset_42 = 42;
+        let dir = tempfile::tempdir().expect("failed to create temporary directory");
+        let path_100 = dir.path().join(SegmentMetadata::filename(base_offset_100));
+        let path_2 = dir.path().join(SegmentMetadata::filename(base_offset_2));
+        let path_42 = dir.path().join(SegmentMetadata::filename(base_offset_42));
+
+        std::fs::File::create(&path_100).expect("failed to create segment file for offset 100");
+        std::fs::File::create(&path_2).expect("failed to create segment file for offset 2");
+        std::fs::File::create(&path_42).expect("failed to create segment file for offset 42");
+
+        let candidates =
+            SegmentedLog::discover_segments(dir.path()).expect("failed to discover segments");
+
+        assert_eq!(candidates[0].base_offset, base_offset_2);
+        assert_eq!(candidates[1].base_offset, base_offset_42);
+        assert_eq!(candidates[2].base_offset, base_offset_100);
+
+        for candidate in &candidates {
+            assert!(candidate.path.exists(), "the candidate path should exist");
+            assert_eq!(
+                candidate.byte_len, 0,
+                "the candidate should have byte length 0"
+            );
+        }
     }
 
     #[test]
     fn segment_discovery_rejects_invalid_filename_and_preserves_path() {
-        todo!(
-            "Implement this test by:\n\
-             1. Create a temporary directory and a regular file with a noncanonical name such as notes.txt.\n\
-             2. Call SegmentedLog::discover_segments.\n\
-             3. Assert that discovery returns StorageError::InvalidSegmentFilename.\n\
-             4. Assert that the error contains the complete path of the invalid file.\n\
-             5. Fail with the actual result if discovery succeeds or returns another error variant."
+        let dir = tempfile::tempdir().expect("failed to create temporary directory");
+        let invalid_file_path = dir.path().join("notes.txt");
+        std::fs::File::create(&invalid_file_path).expect("failed to create invalid segment file");
+
+        let error = SegmentedLog::discover_segments(dir.path())
+            .expect_err("expected an error due to invalid segment filename");
+
+        assert!(
+            matches!(error, StorageError::InvalidSegmentFilename { path } if path == invalid_file_path),
+            "expected StorageError::InvalidSegmentFilename with the correct path"
         );
     }
 
     #[test]
     fn segment_discovery_rejects_subdirectory_and_preserves_path() {
-        todo!(
-            "Implement this test by:\n\
-             1. Create a temporary partition directory.\n\
-             2. Create a child directory directly inside it.\n\
-             3. Call SegmentedLog::discover_segments.\n\
-             4. Assert that discovery returns StorageError::UnexpectedSegmentEntry.\n\
-             5. Assert that the error contains the complete child-directory path.\n\
-             6. Fail with the actual result if discovery succeeds or returns another error variant."
+        let dir = tempfile::tempdir().expect("failed to create temporary directory");
+        let child_dir_path = dir.path().join("child");
+        std::fs::create_dir(&child_dir_path).expect("failed to create child directory");
+
+        let error = SegmentedLog::discover_segments(dir.path())
+            .expect_err("expected an error due to unexpected segment entry");
+
+        assert!(
+            matches!(error, StorageError::UnexpectedSegmentEntry { path } if path == child_dir_path),
+            "expected StorageError::UnexpectedSegmentEntry with the correct path"
         );
     }
 
     #[cfg(unix)]
     #[test]
     fn segment_discovery_rejects_symbolic_link_and_preserves_path() {
-        todo!(
-            "Implement this Unix-only test by:\n\
-             1. Create a temporary partition directory and a regular target file outside that directory.\n\
-             2. Create a symlink inside the partition directory pointing to the target file.\n\
-             3. Call SegmentedLog::discover_segments.\n\
-             4. Assert that discovery returns StorageError::UnexpectedSegmentEntry rather than following the link.\n\
-             5. Assert that the error contains the complete symlink path.\n\
-             6. Fail with the actual result if discovery succeeds or returns another error variant."
+        let dir = tempfile::tempdir().expect("failed to create temporary directory");
+        let target_file_path = dir.path().join("target.txt");
+        std::fs::File::create(&target_file_path).expect("failed to create target file");
+
+        let symlink_path = dir.path().join("symlink");
+        std::os::unix::fs::symlink(&target_file_path, &symlink_path)
+            .expect("failed to create symlink");
+
+        let error = SegmentedLog::discover_segments(dir.path())
+            .expect_err("expected an error due to unexpected segment entry");
+
+        assert!(
+            matches!(error, StorageError::UnexpectedSegmentEntry { path } if path == symlink_path),
+            "expected StorageError::UnexpectedSegmentEntry with the correct path"
         );
     }
 
     #[test]
     fn segmented_log_open_classifies_sorted_final_segment_as_active() {
-        todo!(
-            "Implement this test by:\n\
-             1. Create valid log files with contiguous record ranges for at least three base offsets.\n\
-             2. Create the files in a different order from their numeric base offsets.\n\
-             3. Open SegmentedLog with default limits and configuration.\n\
-             4. Assert that every segment except the highest-base segment is closed.\n\
-             5. Assert that closed_segments are ordered by increasing base offset.\n\
-             6. Assert that the highest-base segment is active.\n\
-             7. Assert that next_offset is the value recovered from the active segment."
+        let dir = tempfile::tempdir().expect("failed to create temporary directory");
+        let base_offset_0 = 1;
+        let base_offset_1 = 0;
+        let base_offset_2 = 2;
+        let file_0_path = dir.path().join(SegmentMetadata::filename(base_offset_0));
+        let file_1_path = dir.path().join(SegmentMetadata::filename(base_offset_1));
+        let file_2_path = dir.path().join(SegmentMetadata::filename(base_offset_2));
+        let limits = RecordLimits::default();
+
+        // Create base 1 before base 0 so discovery must sort by filename offset.
+        let (mut log_1, _) = Log::open_active(&file_0_path, base_offset_0, limits)
+            .expect("creating the base-1 log should succeed");
+        log_1
+            .append(&Record::new(
+                base_offset_0,
+                1_700_000_001,
+                Some(vec![40, 50, 60]),
+                vec![4, 5, 6],
+            ))
+            .expect("appending record 1 should succeed");
+        drop(log_1);
+
+        let (mut log_0, _) = Log::open_active(&file_1_path, base_offset_1, limits)
+            .expect("creating the base-0 log should succeed");
+        log_0
+            .append(&Record::new(
+                base_offset_1,
+                1_700_000_000,
+                Some(vec![10, 20, 30]),
+                vec![1, 2, 3],
+            ))
+            .expect("appending record 0 should succeed");
+        drop(log_0);
+
+        let (log_2, _) = Log::open_active(&file_2_path, base_offset_2, limits)
+            .expect("creating the empty base-2 active log should succeed");
+        drop(log_2);
+
+        let segmented_log = SegmentedLog::open(dir.path(), limits, SegmentConfig::default())
+            .expect("opening the segmented log should succeed");
+
+        assert_eq!(
+            segmented_log.closed_segments().len(),
+            2,
+            "Unexpected number of closed segments"
+        );
+        assert_eq!(
+            segmented_log
+                .closed_segments()
+                .iter()
+                .map(|segment| segment.metadata.base_offset())
+                .collect::<Vec<_>>(),
+            vec![base_offset_1, base_offset_0],
+            "Closed segments do not have the expected base offsets"
+        );
+        assert_eq!(
+            segmented_log.active_segment().metadata.base_offset(),
+            base_offset_2,
+            "Active segment does not have the expected base offset"
+        );
+
+        assert_eq!(
+            segmented_log.next_offset(),
+            base_offset_2,
+            "an empty active segment should recover its base offset as next_offset"
         );
     }
 
