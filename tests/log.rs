@@ -451,7 +451,7 @@ fn opening_truncates_partial_trailing_header() {
     );
 
     assert_eq!(
-        std::fs::read(&path).expect("reading the recovered file should succeed"),
+        read(&path).expect("reading the recovered file should succeed"),
         record1_bytes,
         "recovery should preserve the complete record and remove only the incomplete tail"
     );
@@ -499,7 +499,7 @@ fn opening_truncates_partial_trailing_body() {
     );
 
     assert_eq!(
-        std::fs::read(&path).expect("reading the recovered file should succeed"),
+        read(&path).expect("reading the recovered file should succeed"),
         record1_bytes,
         "recovery should preserve the complete record and remove only the incomplete tail"
     );
@@ -547,7 +547,7 @@ fn opening_truncates_partial_trailing_checksum() {
     );
 
     assert_eq!(
-        std::fs::read(&path).expect("reading the recovered file should succeed"),
+        read(&path).expect("reading the recovered file should succeed"),
         record1_bytes,
         "recovery should preserve the complete record and remove only the incomplete tail"
     );
@@ -591,7 +591,7 @@ fn opening_rejects_invalid_checksum_without_modifying_file() {
     );
 
     assert_eq!(
-        std::fs::read(&path).expect("reading the corrupt file should succeed"),
+        read(&path).expect("reading the corrupt file should succeed"),
         bytes,
         "failed recovery must leave the corrupt file unchanged"
     );
@@ -1163,7 +1163,7 @@ fn recovery_truncates_every_incomplete_record_prefix() {
             "the first scanned record should match the appended record"
         );
         assert_eq!(
-            std::fs::read(&path).expect("reading the log file should succeed"),
+            read(&path).expect("reading the log file should succeed"),
             record
                 .encode(&RecordLimits::default())
                 .expect("encoding the first record should succeed")
@@ -1223,13 +1223,13 @@ fn repeated_recovery_preserves_file_bytes_and_next_offset() {
 
     let (log, next_offset1) = Log::open_active(&path, 0, RecordLimits::default())
         .expect("reopening the log should succeed");
-    let log_bytes1 = std::fs::read(&path).expect("reading the log file bytes should succeed");
+    let log_bytes1 = read(&path).expect("reading the log file bytes should succeed");
 
     drop(log);
 
     let (_, next_offset2) = Log::open_active(&path, 0, RecordLimits::default())
         .expect("reopening the log should succeed");
-    let log_bytes2 = std::fs::read(&path).expect("reading the log file bytes should succeed");
+    let log_bytes2 = read(&path).expect("reading the log file bytes should succeed");
 
     assert_eq!(
         log_bytes2, log_bytes1,
@@ -1277,8 +1277,7 @@ fn recovery_rejects_offset_gaps_without_modifying_file() {
 
     let error = Log::open_active(&path, 0, RecordLimits::default())
         .expect_err("opening the log with offset gaps should fail");
-    let log_bytes_after_error =
-        std::fs::read(&path).expect("reading the log file bytes should succeed");
+    let log_bytes_after_error = read(&path).expect("reading the log file bytes should succeed");
 
     assert!(
         matches!(
@@ -1319,8 +1318,7 @@ fn recovery_rejects_offset_gaps_at_beginning_without_modifying_file() {
 
     let error = Log::open_active(&path, 0, RecordLimits::default())
         .expect_err("opening the log with offset gaps should fail");
-    let log_bytes_after_error =
-        std::fs::read(&path).expect("reading the log file bytes should succeed");
+    let log_bytes_after_error = read(&path).expect("reading the log file bytes should succeed");
 
     assert!(
         matches!(
@@ -1366,7 +1364,7 @@ fn recovery_rejects_duplicate_offsets_without_modifying_file() {
 
     let error = Log::open_active(&path, 0, RecordLimits::default())
         .expect_err("opening the log with offset gaps should fail");
-    let file_bytes = std::fs::read(&path).expect("reading the log file bytes should succeed");
+    let file_bytes = read(&path).expect("reading the log file bytes should succeed");
 
     assert!(
         matches!(
@@ -1419,7 +1417,7 @@ fn recovery_rejects_regressing_offsets_without_modifying_file() {
 
     let error = Log::open_active(&path, 0, RecordLimits::default())
         .expect_err("opening the log with regressing offsets should fail");
-    let file_bytes = std::fs::read(&path).expect("reading the log file bytes should succeed");
+    let file_bytes = read(&path).expect("reading the log file bytes should succeed");
 
     assert!(
         matches!(
@@ -1468,7 +1466,7 @@ fn recovery_rejects_mid_log_invalid_magic_without_modifying_file() {
 
     let error = Log::open_active(&path, 0, RecordLimits::default())
         .expect_err("opening the log with invalid magic should fail");
-    let file_bytes = std::fs::read(&path).expect("reading the log file bytes should succeed");
+    let file_bytes = read(&path).expect("reading the log file bytes should succeed");
 
     assert!(
         matches!(
@@ -1524,7 +1522,7 @@ fn mid_log_invalid_magic_reports_context_and_source() {
 
     let error = Log::open_active(&path, 0, RecordLimits::default())
         .expect_err("opening the log with invalid magic should fail");
-    let file_bytes = std::fs::read(&path).expect("reading the log file bytes should succeed");
+    let file_bytes = read(&path).expect("reading the log file bytes should succeed");
 
     assert!(
         matches!(
@@ -1604,7 +1602,7 @@ fn recovery_rejects_mid_log_invalid_checksum_without_modifying_file() {
 
     let error = Log::open_active(&path, 0, RecordLimits::default())
         .expect_err("opening the log with invalid checksum should fail");
-    let file_bytes = std::fs::read(&path).expect("reading the log file bytes should succeed");
+    let file_bytes = read(&path).expect("reading the log file bytes should succeed");
 
     assert!(
         matches!(
@@ -1642,7 +1640,7 @@ fn recovery_of_empty_log_returns_nonzero_base_offset() {
         "next offset should equal the supplied base offset"
     );
 
-    let file_bytes = std::fs::read(&path).expect("reading the log file bytes should succeed");
+    let file_bytes = read(&path).expect("reading the log file bytes should succeed");
     assert!(file_bytes.is_empty(), "newly created file should be empty");
 }
 
@@ -1686,8 +1684,7 @@ fn recovery_restores_next_offset_from_nonzero_base() {
         "recovered record offsets should match the original offsets"
     );
 
-    let file_bytes_after_recovery =
-        std::fs::read(&path).expect("reading the log file bytes should succeed");
+    let file_bytes_after_recovery = read(&path).expect("reading the log file bytes should succeed");
     let mut expected_bytes = Vec::new();
     expected_bytes.extend_from_slice(&record1_bytes);
     expected_bytes.extend_from_slice(&record2_bytes);
@@ -1714,15 +1711,15 @@ fn recovery_rejects_first_offset_below_nonzero_base_without_modifying_file() {
     drop(file);
 
     let original_file_bytes =
-        std::fs::read(&path).expect("reading the original log file bytes should succeed");
+        read(&path).expect("reading the original log file bytes should succeed");
 
     let result = Log::open_active(&path, base_offset, RecordLimits::default());
     assert!(
         matches!(result, Err(StorageError::UnexpectedOffset { expected, actual }) if expected == base_offset && actual == base_offset - 1)
     );
 
-    let file_bytes_after_failed_recovery = std::fs::read(&path)
-        .expect("reading the log file bytes after failed recovery should succeed");
+    let file_bytes_after_failed_recovery =
+        read(&path).expect("reading the log file bytes after failed recovery should succeed");
     assert_eq!(
         file_bytes_after_failed_recovery, original_file_bytes,
         "file bytes should remain unchanged after failed recovery"
@@ -1745,15 +1742,15 @@ fn recovery_rejects_first_offset_above_nonzero_base_without_modifying_file() {
     drop(file);
 
     let original_file_bytes =
-        std::fs::read(&path).expect("reading the original log file bytes should succeed");
+        read(&path).expect("reading the original log file bytes should succeed");
 
     let result = Log::open_active(&path, base_offset, RecordLimits::default());
     assert!(
         matches!(result, Err(StorageError::UnexpectedOffset { expected, actual }) if expected == base_offset && actual == base_offset + 1)
     );
 
-    let file_bytes_after_failed_recovery = std::fs::read(&path)
-        .expect("reading the log file bytes after failed recovery should succeed");
+    let file_bytes_after_failed_recovery =
+        read(&path).expect("reading the log file bytes after failed recovery should succeed");
     assert_eq!(
         file_bytes_after_failed_recovery, original_file_bytes,
         "file bytes should remain unchanged after failed recovery"
@@ -1762,55 +1759,228 @@ fn recovery_rejects_first_offset_above_nonzero_base_without_modifying_file() {
 
 #[test]
 fn opening_missing_closed_log_fails_without_creating_file() {
-    todo!(
-        "Implement this test in this order:\n\
-         1. Create a temporary directory and choose a path that does not exist.\n\
-         2. Call the closed/read-only Log opening API with base offset 0 and default record limits.\n\
-         3. Extract the returned StorageError without panicking.\n\
-         4. Assert that the error retains an std::io::Error whose kind is NotFound.\n\
-         5. Assert that the path still does not exist, proving closed opening never creates a file."
-    )
+    let dir = tempfile::tempdir().expect("creating temp dir should succeed");
+    let path = dir.path().join("missing.log");
+    assert!(
+        !path.exists(),
+        "the path should not exist before attempting to open the closed log"
+    );
+    let result = Log::open_closed(&path, 0, RecordLimits::default());
+    assert!(matches!(result, Err(StorageError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound));
+    assert!(
+        !path.exists(),
+        "the path should not exist after attempting to open the closed log"
+    );
 }
 
 #[test]
 fn closed_log_validates_and_scans_records_from_nonzero_base() {
-    todo!(
-        "Implement this test in this order:\n\
-         1. Choose a nonzero base offset and construct several consecutive records beginning there.\n\
-         2. Encode the records with one RecordLimits value and write them consecutively to a temporary file.\n\
-         3. Save the complete file bytes before opening it.\n\
-         4. Open the file through the closed/read-only Log API with the chosen base offset and equivalent limits.\n\
-         5. Assert that validation reports the offset immediately after the final record.\n\
-         6. Scan the returned log and assert that every offset and record is preserved in order.\n\
-         7. Read the file again and assert that closed validation did not change its bytes."
-    )
+    let base_offset = 42;
+    let max_offset = base_offset + 9;
+    let limits = RecordLimits::default();
+    let mut records = vec![];
+    let mut record_bytes = vec![];
+    let dir = tempfile::tempdir().expect("creating temp dir should succeed");
+    let path = dir.path().join("closed.log");
+
+    for offset in base_offset..max_offset {
+        records.push(sample_record(offset));
+    }
+
+    for record in &records {
+        record_bytes.extend(
+            record
+                .encode(&limits)
+                .expect("encoding record should succeed"),
+        );
+    }
+
+    std::fs::write(&path, &record_bytes)
+        .expect("writing the encoded records to the file should succeed");
+
+    let (log, next_offset) = Log::open_closed(&path, base_offset, limits)
+        .expect("opening the closed log should succeed");
+
+    assert_eq!(
+        next_offset, max_offset,
+        "the next offset should be immediately after the final record"
+    );
+
+    let mut scanner = log.scan().expect("scanning the log should succeed");
+    let mut asserted = false;
+
+    for expected in records {
+        let actual = scanner
+            .next()
+            .expect("scanner should have next record")
+            .expect("scanner should yield a record");
+        assert_eq!(
+            actual, expected,
+            "scanned record should match the expected record"
+        );
+        asserted = true;
+    }
+
+    let file_bytes = read(&path).expect("reading the file should succeed");
+    assert_eq!(
+        file_bytes, record_bytes,
+        "the file bytes should remain unchanged after validation"
+    );
+    assert!(asserted, "the test should have asserted at least once");
 }
 
 #[test]
 fn closed_log_rejects_every_incomplete_tail_without_modifying_file() {
-    todo!(
-        "Implement this test in this order:\n\
-         1. Encode one complete record at a chosen nonzero base offset.\n\
-         2. Encode the following record and iterate over every incomplete nonempty prefix of its bytes.\n\
-         3. For each prefix, create a separate temporary file containing the complete record followed by that prefix.\n\
-         4. Save the exact bytes before opening the file.\n\
-         5. Attempt to open it through the closed/read-only Log API using the chosen base offset.\n\
-         6. Assert that opening returns the appropriate incomplete-header or incomplete-body storage/codec error.\n\
-         7. Read the file again and assert byte-for-byte equality with the saved contents.\n\
-         8. Include the prefix length in assertion messages so a failure identifies the boundary."
-    )
+    let base_offset = 42;
+    let record1 = sample_record(base_offset);
+    let record2 = sample_record(base_offset + 1);
+    let record1_bytes = record1
+        .encode(&RecordLimits::default())
+        .expect("encoding record1 should succeed");
+    let record2_bytes = record2
+        .encode(&RecordLimits::default())
+        .expect("encoding record2 should succeed");
+    let dir = tempfile::tempdir().expect("creating temp dir should succeed");
+    let mut asserted = false;
+
+    for prefix_len in 1..record2_bytes.len() {
+        let incomplete_prefix = &record2_bytes[..prefix_len];
+        let path = dir
+            .path()
+            .join(format!("incomplete_tail_{}.log", prefix_len));
+        let mut file_bytes = Vec::new();
+        file_bytes.extend(&record1_bytes);
+        file_bytes.extend(incomplete_prefix);
+        std::fs::write(&path, &file_bytes)
+            .expect("writing the incomplete tail to the file should succeed");
+
+        let saved_bytes = read(&path).expect("reading the file should succeed");
+        let error = Log::open_closed(&path, base_offset, RecordLimits::default())
+            .expect_err("opening the closed log with incomplete tail should fail");
+
+        assert!(
+            matches!(
+                error,
+                StorageError::Codec(CodecError::IncompleteHeader | CodecError::IncompleteBody)
+            ),
+            "error should indicate an incomplete header or body for prefix length {}",
+            prefix_len
+        );
+
+        let read_bytes = read(&path).expect("reading the file should succeed for prefix");
+        assert_eq!(
+            read_bytes, saved_bytes,
+            "file bytes should remain unchanged for prefix length {}",
+            prefix_len
+        );
+        asserted = true;
+    }
+
+    assert!(asserted, "the test should have asserted at least once");
 }
 
 #[test]
 fn active_and_closed_opening_treat_same_incomplete_tail_differently() {
-    todo!(
-        "Implement this test in this order:\n\
-         1. Build bytes containing one complete record followed by an incomplete prefix of the next record.\n\
-         2. Write identical bytes to two different temporary files.\n\
-         3. Open the first file through the closed/read-only API and assert that it fails without changing the bytes.\n\
-         4. Open the second file through the active API and assert that it succeeds.\n\
-         5. Assert that active recovery returns the offset after the complete record.\n\
-         6. Assert that the active file was truncated exactly to the complete record's encoded length.\n\
-         7. Scan the recovered active log and assert that it contains only the complete record."
-    )
+    let base_offset = 42;
+    let record1 = sample_record(base_offset);
+    let record2 = sample_record(base_offset + 1);
+    let record1_bytes = record1
+        .encode(&RecordLimits::default())
+        .expect("encoding record1 should succeed");
+    let record2_bytes = record2
+        .encode(&RecordLimits::default())
+        .expect("encoding record2 should succeed");
+    let dir = tempfile::tempdir().expect("creating temp dir should succeed");
+    let mut asserted = false;
+
+    for prefix_len in 1..record2_bytes.len() {
+        let incomplete_prefix = &record2_bytes[..prefix_len];
+        let closed_path = dir
+            .path()
+            .join(format!("incomplete_tail_closed_{}.log", prefix_len));
+        let active_path = dir
+            .path()
+            .join(format!("incomplete_tail_active_{}.log", prefix_len));
+        let mut file_bytes = Vec::new();
+        file_bytes.extend(&record1_bytes);
+        file_bytes.extend(incomplete_prefix);
+        std::fs::write(&closed_path, &file_bytes)
+            .expect("writing the incomplete tail to the file should succeed");
+        std::fs::write(&active_path, &file_bytes)
+            .expect("writing the incomplete tail to the file should succeed");
+
+        let closed_file_bytes = read(&closed_path).expect("reading the closed file should succeed");
+
+        let error = Log::open_closed(&closed_path, base_offset, RecordLimits::default())
+            .expect_err("opening the closed log with incomplete tail should fail");
+
+        assert!(
+            matches!(
+                error,
+                StorageError::Codec(CodecError::IncompleteHeader | CodecError::IncompleteBody)
+            ),
+            "error should indicate an incomplete header or body for prefix length {}",
+            prefix_len
+        );
+
+        let (log, next_offset) =
+            Log::open_active(&active_path, base_offset, RecordLimits::default())
+                .expect("opening the active log should succeed");
+
+        assert_eq!(
+            next_offset,
+            base_offset + 1,
+            "next offset should be after the complete record"
+        );
+
+        let closed_file_bytes_after_open_attempt =
+            read(&closed_path).expect("reading the closed file should succeed");
+        let active_file_bytes_after_open =
+            read(&active_path).expect("reading the active file should succeed");
+
+        assert_eq!(
+            closed_file_bytes_after_open_attempt, closed_file_bytes,
+            "closed file bytes should remain unchanged for prefix length {}",
+            prefix_len
+        );
+        assert_eq!(
+            active_file_bytes_after_open, record1_bytes,
+            "active file bytes should remain unchanged for prefix length {}",
+            prefix_len
+        );
+
+        let mut scanner = log.scan().expect("scanning the active log should succeed");
+        let first_scanned_record = scanner
+            .next()
+            .expect("there should be at least one record in the active log")
+            .expect("the first scanned record should be valid");
+        let second_scan_result = scanner.next();
+        let active_file_bytes = read(&active_path).expect("reading the file should succeed");
+
+        assert_eq!(
+            first_scanned_record, record1,
+            "the first scanned record should match the first record"
+        );
+        assert!(
+            matches!(
+                error,
+                StorageError::Codec(CodecError::IncompleteHeader | CodecError::IncompleteBody)
+            ),
+            "error should indicate an incomplete header or body for prefix length {}",
+            prefix_len
+        );
+        assert!(
+            second_scan_result.is_none(),
+            "the second scan result should be None for the incomplete record"
+        );
+        assert_eq!(
+            active_file_bytes, record1_bytes,
+            "active file bytes should be truncated for prefix length {}",
+            prefix_len
+        );
+
+        asserted = true;
+    }
+
+    assert!(asserted, "the test should have asserted at least once");
 }
