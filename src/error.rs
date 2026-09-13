@@ -54,6 +54,9 @@ pub enum StorageError {
         byte_position: u64,
         source: CodecError,
     },
+    InvalidSegmentFilename {
+        path: PathBuf,
+    },
 }
 
 impl From<CodecError> for StorageError {
@@ -91,6 +94,9 @@ impl std::fmt::Display for StorageError {
                 byte_position,
                 source
             ),
+            StorageError::InvalidSegmentFilename { path } => {
+                write!(f, "invalid segment filename: {}", path.display())
+            }
         }
     }
 }
@@ -104,6 +110,7 @@ impl std::error::Error for StorageError {
             StorageError::OffsetOverflow => None,
             StorageError::UnexpectedOffset { .. } => None,
             StorageError::CorruptRecord { source, .. } => Some(source),
+            StorageError::InvalidSegmentFilename { .. } => None,
         }
     }
 }

@@ -3,7 +3,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::{error::ConfigurationError, storage::log::Log};
+use crate::{
+    error::{ConfigurationError, StorageError},
+    storage::log::{Log, LogScanner},
+};
 
 const SEGMENT_SIZE: u64 = 1024 * 1024 * 64; // 64 MB segment size
 
@@ -66,20 +69,77 @@ impl SegmentMetadata {
     pub fn byte_len(&self) -> u64 {
         self.byte_len
     }
+
+    pub fn filename(base_offset: u64) -> String {
+        format!("{base_offset:020}.log")
+    }
+
+    pub fn parse_base_offset(path: &Path) -> Result<u64, StorageError> {
+        let filename = match path.file_name() {
+            Some(filename) => match filename.to_str() {
+                Some(s) => s,
+                None => {
+                    return Err(StorageError::InvalidSegmentFilename {
+                        path: path.to_path_buf(),
+                    });
+                }
+            },
+            None => {
+                return Err(StorageError::InvalidSegmentFilename {
+                    path: path.to_path_buf(),
+                });
+            }
+        };
+
+        let padded_segment_number = match filename.strip_suffix(".log") {
+            Some(psn) => {
+                if psn.len() != 20 {
+                    return Err(StorageError::InvalidSegmentFilename {
+                        path: path.to_path_buf(),
+                    });
+                }
+                for byte in psn.bytes() {
+                    if !byte.is_ascii_digit() {
+                        return Err(StorageError::InvalidSegmentFilename {
+                            path: path.to_path_buf(),
+                        });
+                    }
+                }
+                psn
+            }
+            None => {
+                return Err(StorageError::InvalidSegmentFilename {
+                    path: path.to_path_buf(),
+                });
+            }
+        };
+
+        match padded_segment_number.parse::<u64>() {
+            Ok(base_offset) => Ok(base_offset),
+            Err(_) => Err(StorageError::InvalidSegmentFilename {
+                path: path.to_path_buf(),
+            }),
+        }
+    }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct ClosedSegment {
     metadata: SegmentMetadata,
+    log: Log,
 }
 
 impl ClosedSegment {
-    pub fn new(metadata: SegmentMetadata) -> Self {
-        Self { metadata }
+    pub fn new(metadata: SegmentMetadata, log: Log) -> Self {
+        Self { metadata, log }
     }
 
     pub fn metadata(&self) -> &SegmentMetadata {
         &self.metadata
+    }
+
+    pub fn scan(&self) -> Result<LogScanner<'_>, StorageError> {
+        self.log.scan()
     }
 }
 
@@ -178,7 +238,9 @@ mod tests {
         let byte_len = 1024;
         let path = Path::new("segment.log");
         let metadata = SegmentMetadata::new(base_offset, path, byte_len);
-        let closed_segment = ClosedSegment::new(metadata);
+        let (log, _) = Log::open_active(path, base_offset, RecordLimits::default())
+            .expect("opening a missing log path should succeed");
+        let closed_segment = ClosedSegment::new(metadata, log);
         let exposed_metadata = closed_segment.metadata();
         assert_eq!(
             exposed_metadata.base_offset(),
