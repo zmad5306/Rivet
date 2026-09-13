@@ -199,14 +199,14 @@ impl SegmentedLog {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs::read, path::Path};
+    use std::{fs::read, path::Path, vec};
 
     use crate::{
         error::{ConfigurationError, StorageError},
         storage::{
             log::Log,
-            record::RecordLimits,
-            segment::{ActiveSegment, ClosedSegment, SegmentConfig, SegmentMetadata},
+            record::{Record, RecordLimits},
+            segment::{ActiveSegment, ClosedSegment, SegmentConfig, SegmentMetadata, SegmentedLog},
         },
     };
 
@@ -269,27 +269,42 @@ mod tests {
     #[test]
     fn closed_segment_exposes_supplied_metadata() {
         let base_offset = 42;
-        let byte_len = 1024;
-        let path = Path::new("segment.log");
-        let metadata = SegmentMetadata::new(base_offset, path, byte_len);
-        let (log, _) = Log::open_active(path, base_offset, RecordLimits::default())
+        let dir = tempfile::tempdir().expect("temporary directory should be created");
+        let path = dir.path().join("00000000000000000042.log");
+        let (mut log, _) = Log::open_active(&path, base_offset, RecordLimits::default())
             .expect("opening a missing log path should succeed");
+        let record = Record::new(
+            base_offset,
+            1_700_000_000,
+            Some(vec![10, 20, 30]),
+            vec![1, 2, 3],
+        );
+        log.append(&record)
+            .expect("appending a record should succeed");
+
+        drop(log);
+
+        let file_len = path.metadata().expect("should get metadata").len();
+
+        let (log, _) = Log::open_closed(&path, base_offset, RecordLimits::default())
+            .expect("reopening the log should succeed");
+        let metadata = SegmentMetadata::new(base_offset, &path, file_len);
         let closed_segment = ClosedSegment::new(metadata, log);
-        let exposed_metadata = closed_segment.metadata();
+
         assert_eq!(
-            exposed_metadata.base_offset(),
+            closed_segment.metadata().base_offset(),
             base_offset,
             "ClosedSegment should expose the correct base offset"
         );
         assert_eq!(
-            exposed_metadata.path(),
+            closed_segment.metadata().path(),
             path,
             "ClosedSegment should expose the correct path"
         );
         assert_eq!(
-            exposed_metadata.byte_len(),
-            byte_len,
-            "ClosedSegment should expose the correct byte length"
+            closed_segment.metadata().byte_len(),
+            file_len,
+            "ClosedSegment should expose the correct file length"
         );
     }
 
@@ -478,20 +493,84 @@ mod tests {
 
     #[test]
     fn segmented_log_exposes_supplied_state_without_mutable_access() {
-        todo!(
-            "Implement this test in this order:\n\
-             1. Create a temporary partition directory and retain its PathBuf.\n\
-             2. Create one record at offset 0 and append it to an active Log whose canonical filename has base offset 0.\n\
-             3. Drop that writable Log, reopen the file with Log::open_closed(), and construct matching SegmentMetadata using the file's actual byte length.\n\
-             4. Move the metadata and read-only Log into a ClosedSegment.\n\
-             5. Open an empty active Log at the canonical filename for base offset 1 and construct matching active metadata and ActiveSegment.\n\
-             6. Create distinct RecordLimits and SegmentConfig values so the getters cannot pass accidentally by returning defaults.\n\
-             7. Construct SegmentedLog directly with one closed segment, the active segment, next offset 1, the limits, the config, and the temporary directory path; this unit-test module may access the parent's private fields.\n\
-             8. Assert that directory() returns the partition directory.\n\
-             9. Assert that closed_segments() has length 1 and its element has base offset 0.\n\
-             10. Assert that active_segment() has base offset 1.\n\
-            11. Assert that next_offset(), limits(), and config() expose the supplied values.\n\
-             12. Keep the TempDir alive through all assertions and do not add mutable getters or a public unchecked constructor for the test."
-        )
+        let base_offset = 0;
+        let dir = tempfile::tempdir().expect("temporary directory should be created");
+        let closed_path = dir.path().join(SegmentMetadata::filename(base_offset));
+        let active_path = dir.path().join(SegmentMetadata::filename(base_offset + 1));
+        let record = Record::new(
+            base_offset,
+            1_700_000_000,
+            Some(vec![10, 20, 30]),
+            vec![1, 2, 3],
+        );
+        let limits = RecordLimits::new(512 * 512, 512 * 512 * 64);
+        let (mut log, _) = Log::open_active(&closed_path, base_offset, limits)
+            .expect("active log should be created");
+        let config = SegmentConfig::default();
+        let expected_max_segment_bytes = config.max_segment_bytes();
+        log.append(&record)
+            .expect("record should be appended successfully");
+
+        drop(log);
+
+        let closed_file_len = closed_path.metadata().expect("should get metadata").len();
+        let (closed_log, _) = Log::open_closed(&closed_path, base_offset, limits)
+            .expect("closed log should be opened successfully");
+        let (active_log, _) = Log::open_active(&active_path, base_offset + 1, limits)
+            .expect("active log should be opened successfully");
+        let closed_metadata = SegmentMetadata::new(base_offset, &closed_path, closed_file_len);
+        let active_metadata = SegmentMetadata::new(base_offset + 1, &active_path, 0);
+        let closed_segment = ClosedSegment::new(closed_metadata, closed_log);
+        let active_segment = ActiveSegment::new(active_metadata, active_log);
+        let segmented_log = SegmentedLog {
+            directory: dir.path().to_path_buf(),
+            closed_segments: vec![closed_segment],
+            active_segment,
+            config,
+            next_offset: base_offset + 1,
+            limits,
+        };
+
+        assert_eq!(
+            segmented_log.directory(),
+            dir.path(),
+            "segmented log should preserve its partition directory"
+        );
+
+        assert_eq!(
+            segmented_log.closed_segments().len(),
+            1,
+            "segmented log should contain one closed segment"
+        );
+
+        let exposed_closed = &segmented_log.closed_segments()[0];
+
+        assert_eq!(exposed_closed.metadata().base_offset(), 0);
+        assert_eq!(exposed_closed.metadata().path(), closed_path);
+        assert_eq!(exposed_closed.metadata().byte_len(), closed_file_len);
+
+        let exposed_active = segmented_log.active_segment();
+
+        assert_eq!(exposed_active.metadata().base_offset(), 1);
+        assert_eq!(exposed_active.metadata().path(), active_path);
+        assert_eq!(exposed_active.metadata().byte_len(), 0);
+
+        assert_eq!(
+            segmented_log.next_offset(),
+            1,
+            "next offset should equal the empty active segment's base"
+        );
+
+        assert_eq!(
+            segmented_log.limits(),
+            limits,
+            "segmented log should preserve its record limits"
+        );
+
+        assert_eq!(
+            segmented_log.config().max_segment_bytes(),
+            expected_max_segment_bytes,
+            "segmented log should preserve its segment configuration"
+        );
     }
 }
