@@ -57,6 +57,23 @@ pub enum StorageError {
     InvalidSegmentFilename {
         path: PathBuf,
     },
+    UnexpectedSegmentEntry {
+        path: PathBuf,
+    },
+    DuplicateSegmentBaseOffset {
+        base_offset: u64,
+        first_path: PathBuf,
+        second_path: PathBuf,
+    },
+    UnexpectedSegmentBaseOffset {
+        path: PathBuf,
+        expected: u64,
+        actual: u64,
+    },
+    EmptyClosedSegment {
+        path: PathBuf,
+        base_offset: u64,
+    },
 }
 
 impl From<CodecError> for StorageError {
@@ -97,6 +114,47 @@ impl std::fmt::Display for StorageError {
             StorageError::InvalidSegmentFilename { path } => {
                 write!(f, "invalid segment filename: {}", path.display())
             }
+            StorageError::UnexpectedSegmentEntry { path } => {
+                write!(
+                    f,
+                    "unexpected entry in segment directory: {}",
+                    path.display()
+                )
+            }
+            StorageError::DuplicateSegmentBaseOffset {
+                base_offset,
+                first_path,
+                second_path,
+            } => {
+                write!(
+                    f,
+                    "duplicate segment base offset {}: {} and {}",
+                    base_offset,
+                    first_path.display(),
+                    second_path.display()
+                )
+            }
+            StorageError::UnexpectedSegmentBaseOffset {
+                path,
+                expected,
+                actual,
+            } => {
+                write!(
+                    f,
+                    "unexpected segment base offset in {}: expected {}, actual {}",
+                    path.display(),
+                    expected,
+                    actual
+                )
+            }
+            StorageError::EmptyClosedSegment { path, base_offset } => {
+                write!(
+                    f,
+                    "closed segment is empty: {} (base offset {})",
+                    path.display(),
+                    base_offset
+                )
+            }
         }
     }
 }
@@ -111,6 +169,10 @@ impl std::error::Error for StorageError {
             StorageError::UnexpectedOffset { .. } => None,
             StorageError::CorruptRecord { source, .. } => Some(source),
             StorageError::InvalidSegmentFilename { .. } => None,
+            StorageError::UnexpectedSegmentEntry { .. } => None,
+            StorageError::DuplicateSegmentBaseOffset { .. } => None,
+            StorageError::UnexpectedSegmentBaseOffset { .. } => None,
+            StorageError::EmptyClosedSegment { .. } => None,
         }
     }
 }
