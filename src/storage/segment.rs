@@ -677,4 +677,98 @@ mod tests {
             "segmented log should preserve its segment configuration"
         );
     }
+
+    #[test]
+    fn segmented_log_open_creates_missing_directory_and_initial_active_segment() {
+        todo!(
+            "Implement this test by:\n\
+             1. Create a temporary parent directory and join a child partition path that does not exist.\n\
+             2. Assert that the partition path does not exist before opening it.\n\
+             3. Open SegmentedLog with default record limits and segment configuration.\n\
+             4. Assert that the partition directory and canonical offset-zero log file now exist.\n\
+             5. Assert that there are no closed segments.\n\
+             6. Assert that the active segment has base offset 0, the canonical path, and byte length 0.\n\
+             7. Assert that next_offset is 0 and the supplied limits and configuration are preserved."
+        );
+    }
+
+    #[test]
+    fn segment_discovery_sorts_candidates_by_numeric_base_offset() {
+        todo!(
+            "Implement this test by:\n\
+             1. Create a temporary directory.\n\
+             2. Create empty canonical segment files for offsets 100, 2, and 42 in deliberately scrambled order.\n\
+             3. Call SegmentedLog::discover_segments on the directory.\n\
+             4. Map the returned candidates to their base offsets.\n\
+             5. Assert that the offsets are ordered numerically as [2, 42, 100].\n\
+             6. Assert that each candidate preserves its complete path and reports byte length 0."
+        );
+    }
+
+    #[test]
+    fn segment_discovery_rejects_invalid_filename_and_preserves_path() {
+        todo!(
+            "Implement this test by:\n\
+             1. Create a temporary directory and a regular file with a noncanonical name such as notes.txt.\n\
+             2. Call SegmentedLog::discover_segments.\n\
+             3. Assert that discovery returns StorageError::InvalidSegmentFilename.\n\
+             4. Assert that the error contains the complete path of the invalid file.\n\
+             5. Fail with the actual result if discovery succeeds or returns another error variant."
+        );
+    }
+
+    #[test]
+    fn segment_discovery_rejects_subdirectory_and_preserves_path() {
+        todo!(
+            "Implement this test by:\n\
+             1. Create a temporary partition directory.\n\
+             2. Create a child directory directly inside it.\n\
+             3. Call SegmentedLog::discover_segments.\n\
+             4. Assert that discovery returns StorageError::UnexpectedSegmentEntry.\n\
+             5. Assert that the error contains the complete child-directory path.\n\
+             6. Fail with the actual result if discovery succeeds or returns another error variant."
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn segment_discovery_rejects_symbolic_link_and_preserves_path() {
+        todo!(
+            "Implement this Unix-only test by:\n\
+             1. Create a temporary partition directory and a regular target file outside that directory.\n\
+             2. Create a symlink inside the partition directory pointing to the target file.\n\
+             3. Call SegmentedLog::discover_segments.\n\
+             4. Assert that discovery returns StorageError::UnexpectedSegmentEntry rather than following the link.\n\
+             5. Assert that the error contains the complete symlink path.\n\
+             6. Fail with the actual result if discovery succeeds or returns another error variant."
+        );
+    }
+
+    #[test]
+    fn segmented_log_open_classifies_sorted_final_segment_as_active() {
+        todo!(
+            "Implement this test by:\n\
+             1. Create valid log files with contiguous record ranges for at least three base offsets.\n\
+             2. Create the files in a different order from their numeric base offsets.\n\
+             3. Open SegmentedLog with default limits and configuration.\n\
+             4. Assert that every segment except the highest-base segment is closed.\n\
+             5. Assert that closed_segments are ordered by increasing base offset.\n\
+             6. Assert that the highest-base segment is active.\n\
+             7. Assert that next_offset is the value recovered from the active segment."
+        );
+    }
+
+    #[test]
+    fn segmented_log_open_reports_active_length_after_tail_recovery() {
+        todo!(
+            "Implement this test by:\n\
+             1. Create a canonical active log containing at least one complete record.\n\
+             2. Close the log and append a nonempty incomplete-record tail directly to the file.\n\
+             3. Record the valid file length before adding the incomplete tail.\n\
+             4. Open SegmentedLog so active recovery truncates that incomplete tail.\n\
+             5. Assert that the physical file length returns to the valid length.\n\
+             6. Assert that active_segment metadata byte_len equals the recovered physical length, not the pre-recovery discovered length.\n\
+             7. Assert that next_offset follows the final complete record."
+        );
+    }
 }
