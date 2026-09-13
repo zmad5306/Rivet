@@ -5,7 +5,10 @@ use std::{
 
 use crate::{
     error::{ConfigurationError, StorageError},
-    storage::log::{Log, LogScanner},
+    storage::{
+        log::{Log, LogScanner},
+        record::RecordLimits,
+    },
 };
 
 const SEGMENT_SIZE: u64 = 1024 * 1024 * 64; // 64 MB segment size
@@ -160,6 +163,37 @@ impl ActiveSegment {
 
     pub fn log(&self) -> &Log {
         &self.log
+    }
+}
+
+#[derive(Debug)]
+pub struct SegmentedLog {
+    directory: PathBuf,
+    closed_segments: Vec<ClosedSegment>,
+    active_segment: ActiveSegment,
+    next_offset: u64,
+    limits: RecordLimits,
+    config: SegmentConfig,
+}
+
+impl SegmentedLog {
+    pub fn directory(&self) -> &Path {
+        self.directory.as_path()
+    }
+    pub fn closed_segments(&self) -> &[ClosedSegment] {
+        &self.closed_segments
+    }
+    pub fn active_segment(&self) -> &ActiveSegment {
+        &self.active_segment
+    }
+    pub fn next_offset(&self) -> u64 {
+        self.next_offset
+    }
+    pub fn limits(&self) -> RecordLimits {
+        self.limits
+    }
+    pub fn config(&self) -> &SegmentConfig {
+        &self.config
     }
 }
 
@@ -440,5 +474,24 @@ mod tests {
                 path, err
             ),
         }
+    }
+
+    #[test]
+    fn segmented_log_exposes_supplied_state_without_mutable_access() {
+        todo!(
+            "Implement this test in this order:\n\
+             1. Create a temporary partition directory and retain its PathBuf.\n\
+             2. Create one record at offset 0 and append it to an active Log whose canonical filename has base offset 0.\n\
+             3. Drop that writable Log, reopen the file with Log::open_closed(), and construct matching SegmentMetadata using the file's actual byte length.\n\
+             4. Move the metadata and read-only Log into a ClosedSegment.\n\
+             5. Open an empty active Log at the canonical filename for base offset 1 and construct matching active metadata and ActiveSegment.\n\
+             6. Create distinct RecordLimits and SegmentConfig values so the getters cannot pass accidentally by returning defaults.\n\
+             7. Construct SegmentedLog directly with one closed segment, the active segment, next offset 1, the limits, the config, and the temporary directory path; this unit-test module may access the parent's private fields.\n\
+             8. Assert that directory() returns the partition directory.\n\
+             9. Assert that closed_segments() has length 1 and its element has base offset 0.\n\
+             10. Assert that active_segment() has base offset 1.\n\
+            11. Assert that next_offset(), limits(), and config() expose the supplied values.\n\
+             12. Keep the TempDir alive through all assertions and do not add mutable getters or a public unchecked constructor for the test."
+        )
     }
 }
