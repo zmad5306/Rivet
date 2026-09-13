@@ -303,7 +303,12 @@ impl SegmentedLog {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs::read, path::Path, vec};
+    use std::{
+        fs::{OpenOptions, read},
+        io::Write,
+        path::Path,
+        vec,
+    };
 
     use crate::{
         error::{ConfigurationError, StorageError},
@@ -867,15 +872,62 @@ mod tests {
 
     #[test]
     fn segmented_log_open_reports_active_length_after_tail_recovery() {
-        todo!(
-            "Implement this test by:\n\
-             1. Create a canonical active log containing at least one complete record.\n\
-             2. Close the log and append a nonempty incomplete-record tail directly to the file.\n\
-             3. Record the valid file length before adding the incomplete tail.\n\
-             4. Open SegmentedLog so active recovery truncates that incomplete tail.\n\
-             5. Assert that the physical file length returns to the valid length.\n\
-             6. Assert that active_segment metadata byte_len equals the recovered physical length, not the pre-recovery discovered length.\n\
-             7. Assert that next_offset follows the final complete record."
+        let dir = tempfile::tempdir().expect("failed to create temporary directory");
+        let base_offset = 0;
+        let path = dir.path().join(SegmentMetadata::filename(base_offset));
+        let limits = RecordLimits::default();
+
+        let (mut log, _) = Log::open_active(&path, base_offset, limits)
+            .expect("creating the active log should succeed");
+        log.append(&Record::new(
+            base_offset,
+            1_700_000_000,
+            Some(vec![10, 20, 30]),
+            vec![1, 2, 3],
+        ))
+        .expect("appending the complete record should succeed");
+        let valid_byte_len = log
+            .len()
+            .expect("reading the valid log length should succeed");
+        drop(log);
+
+        let mut file = OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .expect("opening the active log for tail corruption should succeed");
+        file.write_all(&[0x52])
+            .expect("writing an incomplete header byte should succeed");
+        drop(file);
+
+        let discovered_byte_len = path
+            .metadata()
+            .expect("reading the corrupted log metadata should succeed")
+            .len();
+        assert!(
+            discovered_byte_len > valid_byte_len,
+            "the incomplete tail should increase the file length before recovery"
+        );
+
+        let segmented_log = SegmentedLog::open(dir.path(), limits, SegmentConfig::default())
+            .expect("opening the segmented log should recover its active tail");
+
+        let recovered_byte_len = path
+            .metadata()
+            .expect("reading the recovered log metadata should succeed")
+            .len();
+        assert_eq!(
+            recovered_byte_len, valid_byte_len,
+            "active recovery should truncate only the incomplete tail"
+        );
+        assert_eq!(
+            segmented_log.active_segment().metadata().byte_len(),
+            valid_byte_len,
+            "active metadata should report the post-recovery file length"
+        );
+        assert_eq!(
+            segmented_log.next_offset(),
+            base_offset + 1,
+            "next_offset should follow the final complete record"
         );
     }
 }
