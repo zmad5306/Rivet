@@ -911,10 +911,16 @@ mod tests {
 
         std::fs::File::create(&path).expect("creating the non-zero base segment should succeed");
 
-        let error = SegmentedLog::open(dir.path(), RecordLimits::default(), SegmentConfig::default())
-            .expect_err("opening a segmented log with a non-zero base segment should fail");
+        let error = SegmentedLog::open(
+            dir.path(),
+            RecordLimits::default(),
+            SegmentConfig::default(),
+        )
+        .expect_err("opening a segmented log with a non-zero base segment should fail");
 
-        assert!(matches!(error, StorageError::UnexpectedSegmentBaseOffset { expected: 0, actual: 1, path } if path == path));
+        assert!(
+            matches!(error, StorageError::UnexpectedSegmentBaseOffset { expected: 0, actual: 1, path } if path == path)
+        );
     }
 
     #[test]
