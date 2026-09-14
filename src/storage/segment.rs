@@ -273,6 +273,48 @@ impl SegmentedLog {
         let active_candidate = candidates
             .pop()
             .expect("There should be at least one candidate");
+        let mut expected_next_offset = 0;
+        let mut closed_segments = Vec::new();
+
+        for closed_candidate in candidates {
+            if closed_candidate.base_offset != expected_next_offset {
+                return Err(StorageError::UnexpectedSegmentBaseOffset {
+                    path: closed_candidate.path.clone(),
+                    expected: expected_next_offset,
+                    actual: closed_candidate.base_offset,
+                });
+            }
+
+            let (log, next_offset) =
+                Log::open_closed(&closed_candidate.path, closed_candidate.base_offset, limits)?;
+
+            if log.is_empty()? {
+                return Err(StorageError::EmptyClosedSegment {
+                    path: closed_candidate.path.clone(),
+                    base_offset: closed_candidate.base_offset,
+                });
+            }
+
+            closed_segments.push(ClosedSegment {
+                metadata: SegmentMetadata::new(
+                    closed_candidate.base_offset,
+                    &closed_candidate.path,
+                    log.len()?,
+                ),
+                log,
+            });
+
+            expected_next_offset = next_offset;
+        }
+
+        if active_candidate.base_offset != expected_next_offset {
+            return Err(StorageError::UnexpectedSegmentBaseOffset {
+                path: active_candidate.path.clone(),
+                expected: expected_next_offset,
+                actual: active_candidate.base_offset,
+            });
+        }
+
         let (log, next_offset) =
             Log::open_active(&active_candidate.path, active_candidate.base_offset, limits)?;
         let metadata = SegmentMetadata::new(
@@ -280,15 +322,6 @@ impl SegmentedLog {
             &active_candidate.path,
             log.len()?,
         );
-        let mut closed_segments = vec![];
-
-        for candidate in candidates {
-            let (log, _) = Log::open_closed(&candidate.path, candidate.base_offset, limits)?;
-            let byte_len = log.len()?;
-            let metadata = SegmentMetadata::new(candidate.base_offset, &candidate.path, byte_len);
-            let closed_segment = ClosedSegment { metadata, log };
-            closed_segments.push(closed_segment);
-        }
 
         Ok(Self {
             directory: directory.to_path_buf(),
@@ -868,6 +901,61 @@ mod tests {
             base_offset_2,
             "an empty active segment should recover its base offset as next_offset"
         );
+    }
+
+    #[test]
+    fn segmented_log_open_rejects_first_base_other_than_zero() {
+        let base_offset = 1;
+        let dir = tempfile::tempdir().expect("creating a temp dir should succeed");
+        let path = dir.path().join(SegmentMetadata::filename(base_offset));
+
+        std::fs::File::create(&path).expect("creating the non-zero base segment should succeed");
+
+        let error = SegmentedLog::open(dir.path(), RecordLimits::default(), SegmentConfig::default())
+            .expect_err("opening a segmented log with a non-zero base segment should fail");
+
+        assert!(matches!(error, StorageError::UnexpectedSegmentBaseOffset { expected: 0, actual: 1, path } if path == path));
+    }
+
+    #[test]
+    fn segmented_log_open_rejects_gap_between_segments() {
+        // Arrange: write a nonempty closed segment beginning at zero, then add
+        // a final active segment whose base is greater than the closed log's
+        // recovered next offset.
+        // Act: call SegmentedLog::open.
+        // Assert: the error reports the expected next offset and the larger
+        // active base without changing either file.
+        todo!("write the cross-segment gap test")
+    }
+
+    #[test]
+    fn segmented_log_open_rejects_overlap_between_segments() {
+        // Arrange: write enough records to a closed segment that its recovered
+        // next offset is greater than the following segment's base.
+        // Act: call SegmentedLog::open.
+        // Assert: the error is UnexpectedSegmentBaseOffset and reports the
+        // smaller, overlapping base as the actual value.
+        todo!("write the cross-segment overlap test")
+    }
+
+    #[test]
+    fn segmented_log_open_rejects_empty_closed_segment() {
+        // Arrange: create an empty zero-based segment followed by a canonical
+        // final segment, making the empty file a closed segment.
+        // Act: call SegmentedLog::open.
+        // Assert: the error is EmptyClosedSegment with base zero and the empty
+        // segment's path.
+        todo!("write the empty-closed-segment test")
+    }
+
+    #[test]
+    fn invalid_closed_layout_does_not_recover_partial_active_tail() {
+        // Arrange: create an invalid closed-segment range and an active segment
+        // ending in a partial record. Save the active file's original bytes.
+        // Act: call SegmentedLog::open and expect closed validation to fail.
+        // Assert: the active bytes still exactly match the saved bytes, proving
+        // open_active was never reached.
+        todo!("write the validation-before-active-mutation test")
     }
 
     #[test]
