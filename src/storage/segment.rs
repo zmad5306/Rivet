@@ -938,9 +938,8 @@ mod tests {
             .expect("writing the closed segment should succeed");
         std::fs::File::create(&active_segment).expect("creating the active segment should succeed");
 
-        let error =
-            SegmentedLog::open(&dir_path, RecordLimits::default(), SegmentConfig::default())
-                .expect_err("opening a segmented log with a gap between segments should fail");
+        let error = SegmentedLog::open(dir_path, RecordLimits::default(), SegmentConfig::default())
+            .expect_err("opening a segmented log with a gap between segments should fail");
 
         assert!(
             matches!(error, StorageError::UnexpectedSegmentBaseOffset { expected: 1, actual: 2, path } if path == active_segment)
@@ -988,11 +987,17 @@ mod tests {
             dir.path(),
             RecordLimits::default(),
             SegmentConfig::default(),
-        );
+        )
+        .expect_err("opening the segmented log should fail due to unexpected segment base offset");
 
-        assert!(
-            matches!(error, Err(StorageError::UnexpectedSegmentBaseOffset { expected: 3, actual: 2, path }) if path == active_segment)
-        );
+        assert!(matches!(
+            error,
+            StorageError::UnexpectedSegmentBaseOffset {
+                expected: 3,
+                actual: 2,
+                path,
+            } if path == active_segment
+        ));
         assert_eq!(
             std::fs::read(&closed_segment).expect("reading the closed segment should succeed"),
             closed_file_bytes
@@ -1005,22 +1010,54 @@ mod tests {
 
     #[test]
     fn segmented_log_open_rejects_empty_closed_segment() {
-        // Arrange: create an empty zero-based segment followed by a canonical
-        // final segment, making the empty file a closed segment.
-        // Act: call SegmentedLog::open.
-        // Assert: the error is EmptyClosedSegment with base zero and the empty
-        // segment's path.
-        todo!("write the empty-closed-segment test")
+        let dir = tempfile::tempdir().expect("failed to create temporary directory");
+        let empty_segment = dir.path().join(SegmentMetadata::filename(0));
+        let final_segment = dir.path().join(SegmentMetadata::filename(1));
+
+        std::fs::write(&empty_segment, Vec::<u8>::new())
+            .expect("writing the empty segment should succeed");
+        std::fs::write(&final_segment, Vec::<u8>::new())
+            .expect("writing the final segment should succeed");
+
+        let error = SegmentedLog::open(
+            dir.path(),
+            RecordLimits::default(),
+            SegmentConfig::default(),
+        )
+        .expect_err("opening the segmented log should fail due to empty closed segment");
+
+        assert!(
+            matches!(error, StorageError::EmptyClosedSegment { base_offset: 0, path } if path == empty_segment)
+        );
     }
 
     #[test]
     fn invalid_closed_layout_does_not_recover_partial_active_tail() {
-        // Arrange: create an invalid closed-segment range and an active segment
-        // ending in a partial record. Save the active file's original bytes.
-        // Act: call SegmentedLog::open and expect closed validation to fail.
-        // Assert: the active bytes still exactly match the saved bytes, proving
-        // open_active was never reached.
-        todo!("write the validation-before-active-mutation test")
+        let dir = tempfile::tempdir().expect("failed to create temporary directory");
+        let closed_segment = dir.path().join(SegmentMetadata::filename(0));
+        let active_segment = dir.path().join(SegmentMetadata::filename(1));
+
+        std::fs::write(&closed_segment, Vec::<u8>::new())
+            .expect("writing the invalid closed segment should succeed");
+
+        let active_file_bytes = vec![0x52];
+        std::fs::write(&active_segment, &active_file_bytes)
+            .expect("writing the active segment should succeed");
+
+        let error = SegmentedLog::open(
+            dir.path(),
+            RecordLimits::default(),
+            SegmentConfig::default(),
+        )
+        .expect_err("opening the segmented log should fail due to invalid closed segment");
+
+        assert!(
+            matches!(error, StorageError::EmptyClosedSegment { base_offset: 0, path } if path == closed_segment)
+        );
+        assert_eq!(
+            std::fs::read(&active_segment).expect("reading the active segment should succeed"),
+            active_file_bytes
+        );
     }
 
     #[test]

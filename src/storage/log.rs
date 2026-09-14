@@ -4,7 +4,7 @@ use crate::storage::record::Record;
 use crate::{error::StorageError, storage::record::RecordLimits};
 use std::fs::File;
 use std::fs::OpenOptions;
-use std::io::{BufReader, Read, Write};
+use std::io::{BufReader, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -282,6 +282,7 @@ impl Log {
             .create(true)
             .write(true)
             .read(true)
+            .truncate(false)
             .open(path)?;
 
         let mut log = Log {
@@ -292,6 +293,7 @@ impl Log {
         };
 
         let next_offset = log.recover(base_offset, RecoveryMode::Active)?;
+        log.file.seek(SeekFrom::End(0))?;
 
         Ok((log, next_offset))
     }
