@@ -925,23 +925,82 @@ mod tests {
 
     #[test]
     fn segmented_log_open_rejects_gap_between_segments() {
-        // Arrange: write a nonempty closed segment beginning at zero, then add
-        // a final active segment whose base is greater than the closed log's
-        // recovered next offset.
-        // Act: call SegmentedLog::open.
-        // Assert: the error reports the expected next offset and the larger
-        // active base without changing either file.
-        todo!("write the cross-segment gap test")
+        let dir = tempfile::tempdir().expect("creating a temp dir should succeed");
+        let dir_path = dir.path();
+        let closed_segment = dir.path().join(SegmentMetadata::filename(0));
+        let active_segment = dir.path().join(SegmentMetadata::filename(2));
+        let record = Record::new(0, 1_700_000_000, None, vec![1, 2, 3]);
+        let encoded_record = record
+            .encode(&RecordLimits::default())
+            .expect("encoding the record should succeed");
+
+        std::fs::write(&closed_segment, &encoded_record)
+            .expect("writing the closed segment should succeed");
+        std::fs::File::create(&active_segment).expect("creating the active segment should succeed");
+
+        let error =
+            SegmentedLog::open(&dir_path, RecordLimits::default(), SegmentConfig::default())
+                .expect_err("opening a segmented log with a gap between segments should fail");
+
+        assert!(
+            matches!(error, StorageError::UnexpectedSegmentBaseOffset { expected: 1, actual: 2, path } if path == active_segment)
+        );
+
+        // make sure the closed segment still exists and is unchanged
+        assert!(closed_segment.exists());
+        assert!(active_segment.exists());
+        assert_eq!(
+            std::fs::read(&closed_segment).expect("reading the closed segment should succeed"),
+            encoded_record
+        );
+        assert_eq!(
+            std::fs::read(&active_segment).expect("reading the active segment should succeed"),
+            Vec::<u8>::new()
+        );
     }
 
     #[test]
     fn segmented_log_open_rejects_overlap_between_segments() {
-        // Arrange: write enough records to a closed segment that its recovered
-        // next offset is greater than the following segment's base.
-        // Act: call SegmentedLog::open.
-        // Assert: the error is UnexpectedSegmentBaseOffset and reports the
-        // smaller, overlapping base as the actual value.
-        todo!("write the cross-segment overlap test")
+        let dir = tempfile::tempdir().expect("failed to create temporary directory");
+        let closed_segment = dir.path().join(SegmentMetadata::filename(0));
+        let active_segment = dir.path().join(SegmentMetadata::filename(2));
+        let record1 = Record::new(0, 1_700_000_000, None, vec![1, 2, 3]);
+        let record2 = Record::new(1, 1_700_000_000, None, vec![4, 5, 6]);
+        let record3 = Record::new(2, 1_700_000_000, None, vec![7, 8, 9]);
+        let (mut log, _) = Log::open_active(&closed_segment, 0, RecordLimits::default())
+            .expect("opening the active log should succeed");
+        log.append(&record1)
+            .expect("appending record1 should succeed");
+        log.append(&record2)
+            .expect("appending record2 should succeed");
+        log.append(&record3)
+            .expect("appending record3 should succeed");
+
+        drop(log);
+
+        std::fs::write(&active_segment, Vec::<u8>::new())
+            .expect("writing the active segment should succeed");
+        let closed_file_bytes =
+            std::fs::read(&closed_segment).expect("reading the closed segment should succeed");
+        let active_file_bytes =
+            std::fs::read(&active_segment).expect("reading the active segment should succeed");
+        let error = SegmentedLog::open(
+            dir.path(),
+            RecordLimits::default(),
+            SegmentConfig::default(),
+        );
+
+        assert!(
+            matches!(error, Err(StorageError::UnexpectedSegmentBaseOffset { expected: 3, actual: 2, path }) if path == active_segment)
+        );
+        assert_eq!(
+            std::fs::read(&closed_segment).expect("reading the closed segment should succeed"),
+            closed_file_bytes
+        );
+        assert_eq!(
+            std::fs::read(&active_segment).expect("reading the active segment should succeed"),
+            active_file_bytes
+        );
     }
 
     #[test]
@@ -973,6 +1032,7 @@ mod tests {
 
         let (mut log, _) = Log::open_active(&path, base_offset, limits)
             .expect("creating the active log should succeed");
+
         log.append(&Record::new(
             base_offset,
             1_700_000_000,
@@ -980,15 +1040,18 @@ mod tests {
             vec![1, 2, 3],
         ))
         .expect("appending the complete record should succeed");
+
         let valid_byte_len = log
             .len()
             .expect("reading the valid log length should succeed");
+
         drop(log);
 
         let mut file = OpenOptions::new()
             .append(true)
             .open(&path)
             .expect("opening the active log for tail corruption should succeed");
+
         file.write_all(&[0x52])
             .expect("writing an incomplete header byte should succeed");
         drop(file);
@@ -997,6 +1060,7 @@ mod tests {
             .metadata()
             .expect("reading the corrupted log metadata should succeed")
             .len();
+
         assert!(
             discovered_byte_len > valid_byte_len,
             "the incomplete tail should increase the file length before recovery"
@@ -1004,11 +1068,11 @@ mod tests {
 
         let segmented_log = SegmentedLog::open(dir.path(), limits, SegmentConfig::default())
             .expect("opening the segmented log should recover its active tail");
-
         let recovered_byte_len = path
             .metadata()
             .expect("reading the recovered log metadata should succeed")
             .len();
+
         assert_eq!(
             recovered_byte_len, valid_byte_len,
             "active recovery should truncate only the incomplete tail"

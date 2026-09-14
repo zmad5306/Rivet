@@ -280,7 +280,7 @@ impl Log {
     ) -> Result<(Self, u64), StorageError> {
         let file = OpenOptions::new()
             .create(true)
-            .append(true)
+            .write(true)
             .read(true)
             .open(path)?;
 
