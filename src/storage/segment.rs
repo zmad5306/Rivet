@@ -445,7 +445,9 @@ mod tests {
         storage::{
             log::Log,
             record::{Record, RecordLimits},
-            segment::{ActiveSegment, ClosedSegment, SegmentConfig, SegmentMetadata, SegmentedLog},
+            segment::{
+                self, ActiveSegment, ClosedSegment, SegmentConfig, SegmentMetadata, SegmentedLog,
+            },
         },
     };
 
@@ -1121,13 +1123,99 @@ mod tests {
 
     #[test]
     fn segmented_log_append_payload_rejection_preserves_next_offset_and_allows_retry() {
-        // TODO: Open a SegmentedLog with a small RecordLimits payload maximum.
-        // TODO: Append a valid record at offset 0 and snapshot bytes and active metadata.
-        // TODO: Attempt an oversized payload at offset 1; expect Codec(PayloadTooLarge).
-        // TODO: Assert next_offset remains 1, and bytes and metadata length are unchanged.
-        // TODO: Append a valid record at offset 1; verify next_offset is 2 and scanning
-        // returns only the two successful records.
-        todo!("implement segmented append payload rejection test");
+        let limits = RecordLimits::new(2, 3);
+        let dir = tempfile::tempdir().expect("creating temp dir should succeed");
+        let dir_path = dir.path();
+        let mut segmented_log = SegmentedLog::open(dir_path, limits, SegmentConfig::default())
+            .expect("opening segmented log should succeed");
+        let record0 = Record::new(0, 1_700_000_000, None, vec![1, 2, 3]);
+        let record1 = Record::new(1, 1_700_000_001, None, vec![4, 5, 6, 7]);
+        let record2 = Record::new(2, 1_700_000_002, None, vec![8, 9, 10]);
+        let expected_file_data = record0
+            .encode(&limits)
+            .expect("encoding expected file data should succeed");
+        let expected_file_data_len = u64::try_from(expected_file_data.len())
+            .expect("converting expected file data length to u64 should succeed");
+        let record2_file_data = record2
+            .encode(&limits)
+            .expect("encoding record 2 should succeed");
+        let record2_file_data_len = u64::try_from(record2_file_data.len())
+            .expect("converting record 2 file data length to u64 should succeed");
+
+        segmented_log
+            .append(&record0)
+            .expect("Appending offset 0 should succeed");
+
+        let file_data =
+            std::fs::read(dir_path.join("0")).expect("reading the segment file should succeed");
+        let error = segmented_log
+            .append(&record1)
+            .expect_err("Appending oversized payload should fail");
+
+        assert!(matches!(
+            error,
+            StorageError::Codec(CodecError::PayloadTooLarge)
+        ));
+        assert_eq!(
+            segmented_log.next_offset(),
+            1,
+            "Next offset should remain 1 after failed append of offset 1"
+        );
+        assert_eq!(
+            file_data, expected_file_data,
+            "Segment file should remain unchanged after failed append"
+        );
+        assert_eq!(
+            segmented_log.active_segment.metadata.byte_len(),
+            expected_file_data_len,
+            "Active metadata length should remain unchanged after failed append"
+        );
+        assert_eq!(
+            fs::metadata(&dir_path.join("0"))
+                .expect("getting file metadata should succeed")
+                .len(),
+            expected_file_data_len,
+            "Physical file length should remain unchanged after failed append"
+        );
+
+        segmented_log
+            .append(&record2)
+            .expect("Appending offset 2 should succeed");
+
+        let file_data_after_record2 =
+            std::fs::read(dir_path.join("0")).expect("reading the segment file should succeed");
+        assert_eq!(
+            file_data_after_record2,
+            [expected_file_data, record2_file_data].concat(),
+            "Segment file should contain both the initial and the second record after successful append"
+        );
+        assert_eq!(
+            segmented_log.active_segment.metadata.byte_len(),
+            expected_file_data_len + record2_file_data_len,
+            "Active metadata length should reflect both the initial and the second record after successful append"
+        );
+        assert_eq!(
+            fs::metadata(&dir_path.join("0"))
+                .expect("getting file metadata should succeed")
+                .len(),
+            expected_file_data_len + record2_file_data_len,
+            "Physical file length should reflect both the initial and the second record after successful append"
+        );
+
+        let mut scanner = segmented_log
+            .scan()
+            .expect("scanning the segmented log should succeed");
+        let scanned_record0 = scanner
+            .next()
+            .expect("scanning should return the first record")
+            .expect("scanned record 0 should be present");
+        let scanned_record2 = scanner
+            .next()
+            .expect("scanning should return the second record")
+            .expect("scanned record 2 should be present");
+
+        assert_eq!(scanned_record0, record0);
+        assert_eq!(scanned_record2, record2);
     }
 
     #[test]
