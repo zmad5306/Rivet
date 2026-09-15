@@ -5,10 +5,10 @@ use std::{
 };
 
 use crate::{
-    error::{ConfigurationError, StorageError},
+    error::{CodecError, ConfigurationError, StorageError},
     storage::{
         log::{Log, LogScanner},
-        record::RecordLimits,
+        record::{Record, RecordLimits},
     },
 };
 
@@ -164,6 +164,22 @@ impl ActiveSegment {
 
     pub fn scan(&self) -> Result<LogScanner<'_>, StorageError> {
         self.log.scan()
+    }
+
+    pub fn append(&mut self, record: &Record) -> Result<(), StorageError> {
+        let encoded_len = record.encoded_len()?;
+        let encoded_length = u64::try_from(encoded_len)
+            .map_err(|_| StorageError::Codec(CodecError::LengthOverflow))?;
+        let future_byte_len = self
+            .metadata
+            .byte_len()
+            .checked_add(encoded_length)
+            .ok_or(StorageError::Codec(CodecError::LengthOverflow))?;
+
+        self.log.append(record)?;
+        self.metadata.byte_len = future_byte_len;
+
+        Ok(())
     }
 }
 
@@ -337,7 +353,7 @@ impl SegmentedLog {
 #[cfg(test)]
 mod tests {
     use std::{
-        fs::{OpenOptions, read},
+        fs::{self, OpenOptions, read},
         io::Write,
         path::Path,
         vec,
@@ -478,6 +494,173 @@ mod tests {
             exposed_metadata.byte_len(),
             byte_length,
             "ActiveSegment should expose the correct byte length"
+        );
+    }
+
+    #[test]
+    fn active_segment_append_updates_length_and_preserves_records() {
+        let dir = tempfile::tempdir().expect("temporary directory should be created");
+        let dir_path = dir.path();
+        let path = dir_path.join(SegmentMetadata::filename(0));
+        fs::File::create(&path).expect("creating the log file should succeed");
+        let metadata = SegmentMetadata::new(0, &path, 0);
+        let (log, _) = Log::open_active(&path, 0, RecordLimits::default())
+            .expect("opening a missing log path should succeed");
+        let mut active_segment = ActiveSegment::new(metadata, log);
+        let record1 = Record::new(0, 1_700_000_000, None, vec![1, 2, 3]);
+        let record2 = Record::new(1, 1_700_000_001, None, vec![4, 5, 6]);
+        let record1_encoded_len = u64::try_from(
+            record1
+                .encoded_len()
+                .expect("record1 encoded length should be retrievable"),
+        )
+        .expect("record1 encoded length should fit in u64");
+        let record2_encoded_len = u64::try_from(
+            record2
+                .encoded_len()
+                .expect("record2 encoded length should be retrievable"),
+        )
+        .expect("record2 encoded length should fit in u64");
+
+        active_segment
+            .append(&record1)
+            .expect("appending record1 should succeed");
+
+        assert_eq!(
+            active_segment.metadata().byte_len(),
+            record1_encoded_len,
+            "ActiveSegment byte length should be updated after appending record1"
+        );
+
+        active_segment
+            .append(&record2)
+            .expect("appending record2 should succeed");
+
+        assert_eq!(
+            active_segment.metadata().byte_len(),
+            record1_encoded_len + record2_encoded_len,
+            "ActiveSegment byte length should be updated after appending record2"
+        );
+        assert_eq!(
+            fs::metadata(&path)
+                .expect("getting file metadata should succeed")
+                .len(),
+            record1_encoded_len + record2_encoded_len,
+            "Physical file length should match the accumulated encoded lengths after appending record2"
+        );
+
+        let mut scanner = active_segment
+            .scan()
+            .expect("creating scanner should succeed");
+        let scanned_record1 = scanner
+            .read_next_record()
+            .expect("expected record1 to be present")
+            .expect("expected record1 to be valid");
+        let scanned_record2 = scanner
+            .read_next_record()
+            .expect("expected record2 to be present")
+            .expect("expected record2 to be valid");
+        let next_scan_result = scanner
+            .read_next_record()
+            .expect("expected no more records to be present");
+
+        assert_eq!(
+            scanned_record1, record1,
+            "Scanned record1 should match the appended record1"
+        );
+        assert_eq!(
+            scanned_record2, record2,
+            "Scanned record2 should match the appended record2"
+        );
+        assert!(
+            next_scan_result.is_none(),
+            "No more records should be present after scanning all appended records"
+        );
+    }
+
+    #[test]
+    fn active_segment_append_rejection_preserves_state_and_allows_retry() {
+        let limits = RecordLimits::new(3, 3);
+        let dir = tempfile::tempdir().expect("creating temp dir should succeed");
+        let dir_path = dir.path();
+        let path = dir_path.join(SegmentMetadata::filename(0));
+        fs::File::create(&path).expect("creating the log file should succeed");
+        let (log, _) =
+            Log::open_active(&path, 0, limits).expect("opening the active log should succeed");
+        let metadata = SegmentMetadata::new(0, &path, 0);
+        let mut active_segment = ActiveSegment::new(metadata, log);
+        let initial_file_bytes =
+            fs::read(&path).expect("reading initial file bytes should succeed");
+        let record1 = Record::new(0, 1_700_000_000, None, vec![1, 2, 3, 4]);
+
+        let error = active_segment
+            .append(&record1)
+            .expect_err("appending a record exceeding the payload limit should fail");
+        assert!(
+            matches!(error, StorageError::Codec(CodecError::PayloadTooLarge)),
+            "Expected a PayloadTooLarge error"
+        );
+
+        let final_file_bytes = fs::read(&path).expect("reading final file bytes should succeed");
+        assert_eq!(
+            initial_file_bytes, final_file_bytes,
+            "File bytes should remain unchanged after a rejected append"
+        );
+        assert_eq!(
+            active_segment.metadata().byte_len(),
+            0,
+            "Metadata byte length should remain unchanged after a rejected append"
+        );
+
+        let record2 = Record::new(0, 1_700_000_000, None, vec![5, 6, 7]);
+        active_segment
+            .append(&record2)
+            .expect("appending a valid record should succeed");
+
+        let record2_encoded = record2
+            .encode(&limits)
+            .expect("encoding record2 should succeed");
+        let record2_encoded_len = u64::try_from(record2_encoded.len())
+            .expect("converting encoded length to u64 should succeed");
+
+        let final_file_bytes = fs::read(&path).expect("reading final file bytes should succeed");
+        assert_eq!(
+            final_file_bytes, record2_encoded,
+            "File bytes should reflect the successfully appended record"
+        );
+        assert_eq!(
+            active_segment.metadata().byte_len(),
+            record2_encoded_len,
+            "Metadata byte length should reflect the successfully appended record"
+        );
+    }
+
+    #[test]
+    fn active_segment_append_length_overflow_does_not_write() {
+        let dir = tempfile::tempdir().expect("creating temporary directory should succeed");
+        let dir_path = dir.path();
+        let path = dir_path.join(SegmentMetadata::filename(0));
+        let (log, _) = Log::open_active(&path, 0, RecordLimits::default())
+            .expect("opening active log should succeed");
+        let metadata = SegmentMetadata::new(0, &path, u64::MAX);
+        let mut active_segment = ActiveSegment::new(metadata, log);
+        let record = Record::new(0, 1_700_000_000, None, vec![5, 6, 7]);
+        let error = active_segment
+            .append(&record)
+            .expect_err("appending a record that would overflow should fail");
+        assert!(
+            matches!(error, StorageError::Codec(CodecError::LengthOverflow)),
+            "Expected a LengthOverflow error"
+        );
+        assert_eq!(
+            active_segment.metadata().byte_len(),
+            u64::MAX,
+            "Metadata byte length should remain u64::MAX after a failed append"
+        );
+        assert_eq!(
+            fs::read(&path).expect("reading final file bytes should succeed"),
+            vec![],
+            "File should remain empty after a failed append due to length overflow"
         );
     }
 
