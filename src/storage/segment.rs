@@ -339,12 +339,12 @@ mod tests {
     use std::{
         fs::{OpenOptions, read},
         io::Write,
-        path::Path,
+        path::{Path},
         vec,
     };
 
     use crate::{
-        error::{ConfigurationError, StorageError},
+        error::{CodecError, ConfigurationError, StorageError},
         storage::{
             log::Log,
             record::{Record, RecordLimits},
@@ -412,7 +412,8 @@ mod tests {
     fn closed_segment_exposes_supplied_metadata() {
         let base_offset = 42;
         let dir = tempfile::tempdir().expect("temporary directory should be created");
-        let path = dir.path().join("00000000000000000042.log");
+        let dir_path = dir.path();
+        let path = dir_path.join("00000000000000000042.log");
         let (mut log, _) = Log::open_active(&path, base_offset, RecordLimits::default())
             .expect("opening a missing log path should succeed");
         let record = Record::new(
@@ -453,7 +454,8 @@ mod tests {
     #[test]
     fn active_segment_exposes_supplied_metadata() {
         let dir = tempfile::tempdir().expect("temporary directory should be created");
-        let path = dir.path().join("00000000000000000000.log");
+        let dir_path = dir.path();
+        let path = dir_path.join("00000000000000000000.log");
         let (log, _) = Log::open_active(&path, 0, RecordLimits::default())
             .expect("opening a missing log path should succeed");
         let byte_len = read(&path).map(|b| b.len()).unwrap_or(0);
@@ -637,8 +639,9 @@ mod tests {
     fn segmented_log_exposes_supplied_state_without_mutable_access() {
         let base_offset = 0;
         let dir = tempfile::tempdir().expect("temporary directory should be created");
-        let closed_path = dir.path().join(SegmentMetadata::filename(base_offset));
-        let active_path = dir.path().join(SegmentMetadata::filename(base_offset + 1));
+        let dir_path = dir.path();
+        let closed_path = dir_path.join(SegmentMetadata::filename(base_offset));
+        let active_path = dir_path.join(SegmentMetadata::filename(base_offset + 1));
         let record = Record::new(
             base_offset,
             1_700_000_000,
@@ -665,7 +668,7 @@ mod tests {
         let closed_segment = ClosedSegment::new(closed_metadata, closed_log);
         let active_segment = ActiveSegment::new(active_metadata, active_log);
         let segmented_log = SegmentedLog {
-            directory: dir.path().to_path_buf(),
+            directory: dir_path.to_path_buf(),
             closed_segments: vec![closed_segment],
             active_segment,
             config,
@@ -675,7 +678,7 @@ mod tests {
 
         assert_eq!(
             segmented_log.directory(),
-            dir.path(),
+            dir_path,
             "segmented log should preserve its partition directory"
         );
 
@@ -720,22 +723,20 @@ mod tests {
     fn segmented_log_open_creates_missing_directory_and_initial_active_segment() {
         let base_offset = 0;
         let dir = tempfile::tempdir().expect("failed to create temporary directory");
-        let path = dir.path().join(SegmentMetadata::filename(base_offset));
+        let dir_path = dir.path();
+        let path = dir_path.join(SegmentMetadata::filename(base_offset));
 
         assert!(
             !path.exists(),
             "the segment path should not exist before opening the segmented log"
         );
 
-        let segmented_log = SegmentedLog::open(
-            dir.path(),
-            RecordLimits::default(),
-            SegmentConfig::default(),
-        )
-        .expect("failed to open segmented log");
+        let segmented_log =
+            SegmentedLog::open(&dir_path, RecordLimits::default(), SegmentConfig::default())
+                .expect("failed to open segmented log");
 
         assert!(
-            path.exists(),
+            dir_path.exists(),
             "the segment path should exist after opening the segmented log"
         );
         assert!(
@@ -745,7 +746,7 @@ mod tests {
 
         let active_segment = segmented_log.active_segment();
         assert_eq!(active_segment.metadata().base_offset(), 0);
-        assert_eq!(active_segment.metadata().path(), path);
+        assert_eq!(active_segment.metadata().path(), dir_path);
         assert_eq!(active_segment.metadata().byte_len(), 0);
 
         assert_eq!(segmented_log.next_offset(), 0);
@@ -759,16 +760,17 @@ mod tests {
         let base_offset_2 = 2;
         let base_offset_42 = 42;
         let dir = tempfile::tempdir().expect("failed to create temporary directory");
-        let path_100 = dir.path().join(SegmentMetadata::filename(base_offset_100));
-        let path_2 = dir.path().join(SegmentMetadata::filename(base_offset_2));
-        let path_42 = dir.path().join(SegmentMetadata::filename(base_offset_42));
+        let dir_path = dir.path();
+        let path_100 = dir_path.join(SegmentMetadata::filename(base_offset_100));
+        let path_2 = dir_path.join(SegmentMetadata::filename(base_offset_2));
+        let path_42 = dir_path.join(SegmentMetadata::filename(base_offset_42));
 
         std::fs::File::create(&path_100).expect("failed to create segment file for offset 100");
         std::fs::File::create(&path_2).expect("failed to create segment file for offset 2");
         std::fs::File::create(&path_42).expect("failed to create segment file for offset 42");
 
         let candidates =
-            SegmentedLog::discover_segments(dir.path()).expect("failed to discover segments");
+            SegmentedLog::discover_segments(dir_path).expect("failed to discover segments");
 
         assert_eq!(candidates[0].base_offset, base_offset_2);
         assert_eq!(candidates[1].base_offset, base_offset_42);
@@ -786,10 +788,11 @@ mod tests {
     #[test]
     fn segment_discovery_rejects_invalid_filename_and_preserves_path() {
         let dir = tempfile::tempdir().expect("failed to create temporary directory");
-        let invalid_file_path = dir.path().join("notes.txt");
+        let dir_path = dir.path();
+        let invalid_file_path = dir_path.join("notes.txt");
         std::fs::File::create(&invalid_file_path).expect("failed to create invalid segment file");
 
-        let error = SegmentedLog::discover_segments(dir.path())
+        let error = SegmentedLog::discover_segments(dir_path)
             .expect_err("expected an error due to invalid segment filename");
 
         assert!(
@@ -801,10 +804,11 @@ mod tests {
     #[test]
     fn segment_discovery_rejects_subdirectory_and_preserves_path() {
         let dir = tempfile::tempdir().expect("failed to create temporary directory");
-        let child_dir_path = dir.path().join("child");
+        let dir_path = dir.path();
+        let child_dir_path = dir_path.join("child");
         std::fs::create_dir(&child_dir_path).expect("failed to create child directory");
 
-        let error = SegmentedLog::discover_segments(dir.path())
+        let error = SegmentedLog::discover_segments(dir_path)
             .expect_err("expected an error due to unexpected segment entry");
 
         assert!(
@@ -817,14 +821,15 @@ mod tests {
     #[test]
     fn segment_discovery_rejects_symbolic_link_and_preserves_path() {
         let dir = tempfile::tempdir().expect("failed to create temporary directory");
-        let target_file_path = dir.path().join("target.txt");
+        let dir_path = dir.path();
+        let target_file_path = dir_path.join("target.txt");
         std::fs::File::create(&target_file_path).expect("failed to create target file");
 
-        let symlink_path = dir.path().join("symlink");
+        let symlink_path = dir_path.join("symlink");
         std::os::unix::fs::symlink(&target_file_path, &symlink_path)
             .expect("failed to create symlink");
 
-        let error = SegmentedLog::discover_segments(dir.path())
+        let error = SegmentedLog::discover_segments(dir_path)
             .expect_err("expected an error due to unexpected segment entry");
 
         assert!(
@@ -836,12 +841,13 @@ mod tests {
     #[test]
     fn segmented_log_open_classifies_sorted_final_segment_as_active() {
         let dir = tempfile::tempdir().expect("failed to create temporary directory");
+        let dir_path = dir.path();
         let base_offset_0 = 1;
         let base_offset_1 = 0;
         let base_offset_2 = 2;
-        let file_0_path = dir.path().join(SegmentMetadata::filename(base_offset_0));
-        let file_1_path = dir.path().join(SegmentMetadata::filename(base_offset_1));
-        let file_2_path = dir.path().join(SegmentMetadata::filename(base_offset_2));
+        let file_0_path = dir_path.join(SegmentMetadata::filename(base_offset_0));
+        let file_1_path = dir_path.join(SegmentMetadata::filename(base_offset_1));
+        let file_2_path = dir_path.join(SegmentMetadata::filename(base_offset_2));
         let limits = RecordLimits::default();
 
         // Create base 1 before base 0 so discovery must sort by filename offset.
@@ -873,7 +879,7 @@ mod tests {
             .expect("creating the empty base-2 active log should succeed");
         drop(log_2);
 
-        let segmented_log = SegmentedLog::open(dir.path(), limits, SegmentConfig::default())
+        let segmented_log = SegmentedLog::open(dir_path, limits, SegmentConfig::default())
             .expect("opening the segmented log should succeed");
 
         assert_eq!(
@@ -907,19 +913,17 @@ mod tests {
     fn segmented_log_open_rejects_first_base_other_than_zero() {
         let base_offset = 1;
         let dir = tempfile::tempdir().expect("creating a temp dir should succeed");
-        let path = dir.path().join(SegmentMetadata::filename(base_offset));
+        let dir_path = dir.path();
+        let segment_path = dir_path.join(SegmentMetadata::filename(base_offset));
 
-        std::fs::File::create(&path).expect("creating the non-zero base segment should succeed");
+        std::fs::File::create(&segment_path)
+            .expect("creating the non-zero base segment should succeed");
 
-        let error = SegmentedLog::open(
-            dir.path(),
-            RecordLimits::default(),
-            SegmentConfig::default(),
-        )
-        .expect_err("opening a segmented log with a non-zero base segment should fail");
+        let error = SegmentedLog::open(dir_path, RecordLimits::default(), SegmentConfig::default())
+            .expect_err("opening a segmented log with a non-zero base segment should fail");
 
         assert!(
-            matches!(error, StorageError::UnexpectedSegmentBaseOffset { expected: 0, actual: 1, path } if path == path)
+            matches!(error, StorageError::UnexpectedSegmentBaseOffset { expected: 0, actual: 1, path } if path == segment_path)
         );
     }
 
@@ -927,8 +931,8 @@ mod tests {
     fn segmented_log_open_rejects_gap_between_segments() {
         let dir = tempfile::tempdir().expect("creating a temp dir should succeed");
         let dir_path = dir.path();
-        let closed_segment = dir.path().join(SegmentMetadata::filename(0));
-        let active_segment = dir.path().join(SegmentMetadata::filename(2));
+        let closed_segment = dir_path.join(SegmentMetadata::filename(0));
+        let active_segment = dir_path.join(SegmentMetadata::filename(2));
         let record = Record::new(0, 1_700_000_000, None, vec![1, 2, 3]);
         let encoded_record = record
             .encode(&RecordLimits::default())
@@ -961,8 +965,9 @@ mod tests {
     #[test]
     fn segmented_log_open_rejects_overlap_between_segments() {
         let dir = tempfile::tempdir().expect("failed to create temporary directory");
-        let closed_segment = dir.path().join(SegmentMetadata::filename(0));
-        let active_segment = dir.path().join(SegmentMetadata::filename(2));
+        let dir_path = dir.path();
+        let closed_segment = dir_path.join(SegmentMetadata::filename(0));
+        let active_segment = dir_path.join(SegmentMetadata::filename(2));
         let record1 = Record::new(0, 1_700_000_000, None, vec![1, 2, 3]);
         let record2 = Record::new(1, 1_700_000_000, None, vec![4, 5, 6]);
         let record3 = Record::new(2, 1_700_000_000, None, vec![7, 8, 9]);
@@ -983,12 +988,10 @@ mod tests {
             std::fs::read(&closed_segment).expect("reading the closed segment should succeed");
         let active_file_bytes =
             std::fs::read(&active_segment).expect("reading the active segment should succeed");
-        let error = SegmentedLog::open(
-            dir.path(),
-            RecordLimits::default(),
-            SegmentConfig::default(),
-        )
-        .expect_err("opening the segmented log should fail due to unexpected segment base offset");
+        let error = SegmentedLog::open(dir_path, RecordLimits::default(), SegmentConfig::default())
+            .expect_err(
+                "opening the segmented log should fail due to unexpected segment base offset",
+            );
 
         assert!(matches!(
             error,
@@ -1011,20 +1014,17 @@ mod tests {
     #[test]
     fn segmented_log_open_rejects_empty_closed_segment() {
         let dir = tempfile::tempdir().expect("failed to create temporary directory");
-        let empty_segment = dir.path().join(SegmentMetadata::filename(0));
-        let final_segment = dir.path().join(SegmentMetadata::filename(1));
+        let dir_path = dir.path();
+        let empty_segment = dir_path.join(SegmentMetadata::filename(0));
+        let final_segment = dir_path.join(SegmentMetadata::filename(1));
 
         std::fs::write(&empty_segment, Vec::<u8>::new())
             .expect("writing the empty segment should succeed");
         std::fs::write(&final_segment, Vec::<u8>::new())
             .expect("writing the final segment should succeed");
 
-        let error = SegmentedLog::open(
-            dir.path(),
-            RecordLimits::default(),
-            SegmentConfig::default(),
-        )
-        .expect_err("opening the segmented log should fail due to empty closed segment");
+        let error = SegmentedLog::open(dir_path, RecordLimits::default(), SegmentConfig::default())
+            .expect_err("opening the segmented log should fail due to empty closed segment");
 
         assert!(
             matches!(error, StorageError::EmptyClosedSegment { base_offset: 0, path } if path == empty_segment)
@@ -1034,8 +1034,9 @@ mod tests {
     #[test]
     fn invalid_closed_layout_does_not_recover_partial_active_tail() {
         let dir = tempfile::tempdir().expect("failed to create temporary directory");
-        let closed_segment = dir.path().join(SegmentMetadata::filename(0));
-        let active_segment = dir.path().join(SegmentMetadata::filename(1));
+        let dir_path = dir.path();
+        let closed_segment = dir_path.join(SegmentMetadata::filename(0));
+        let active_segment = dir_path.join(SegmentMetadata::filename(1));
 
         std::fs::write(&closed_segment, Vec::<u8>::new())
             .expect("writing the invalid closed segment should succeed");
@@ -1044,12 +1045,8 @@ mod tests {
         std::fs::write(&active_segment, &active_file_bytes)
             .expect("writing the active segment should succeed");
 
-        let error = SegmentedLog::open(
-            dir.path(),
-            RecordLimits::default(),
-            SegmentConfig::default(),
-        )
-        .expect_err("opening the segmented log should fail due to invalid closed segment");
+        let error = SegmentedLog::open(dir_path, RecordLimits::default(), SegmentConfig::default())
+            .expect_err("opening the segmented log should fail due to invalid closed segment");
 
         assert!(
             matches!(error, StorageError::EmptyClosedSegment { base_offset: 0, path } if path == closed_segment)
@@ -1061,10 +1058,382 @@ mod tests {
     }
 
     #[test]
+    fn populated_multi_segment_restart_restores_global_next_offset() {
+        let dir = tempfile::tempdir().expect("failed to create temporary directory");
+        let dir_path = dir.path();
+
+        let record_0 = Record::new(0, 1_700_000_000, None, vec![1, 2, 3]);
+        let record_1 = Record::new(1, 1_700_000_001, None, vec![4, 5, 6]);
+        let record_2 = Record::new(2, 1_700_000_002, None, vec![7, 8, 9]);
+        let record_3 = Record::new(3, 1_700_000_003, None, vec![10, 11, 12]);
+        let record_4 = Record::new(4, 1_700_000_004, None, vec![13, 14, 15]);
+        let record_5 = Record::new(5, 1_700_000_005, None, vec![16, 17, 18]);
+
+        let closed_segment_0 = dir_path.join(SegmentMetadata::filename(0));
+        let closed_segment_1 = dir_path.join(SegmentMetadata::filename(1));
+        let active_segment = dir_path.join(SegmentMetadata::filename(2));
+
+        let (mut closed_log_0, _) = Log::open_active(&closed_segment_0, 0, RecordLimits::default())
+            .expect("opening the closed segment should succeed");
+        let (mut closed_log_1, _) = Log::open_active(&closed_segment_1, 1, RecordLimits::default())
+            .expect("opening the closed segment should succeed");
+        let (mut active_log, _) = Log::open_active(&active_segment, 2, RecordLimits::default())
+            .expect("opening the active segment should succeed");
+
+        closed_log_0
+            .append(&record_0)
+            .expect("appending record 0 should succeed");
+        closed_log_0
+            .append(&record_1)
+            .expect("appending record 1 should succeed");
+
+        closed_log_1
+            .append(&record_2)
+            .expect("appending record 2 should succeed");
+        closed_log_1
+            .append(&record_3)
+            .expect("appending record 3 should succeed");
+
+        active_log
+            .append(&record_4)
+            .expect("appending record 4 should succeed");
+        active_log
+            .append(&record_5)
+            .expect("appending record 5 should succeed");
+
+        drop(closed_log_0);
+        drop(closed_log_1);
+        drop(active_log);
+
+        let segmented_log =
+            SegmentedLog::open(dir_path, RecordLimits::default(), SegmentConfig::default())
+                .expect("opening the segmented log should succeed");
+
+        let closed_segments = segmented_log.closed_segments();
+        assert_eq!(closed_segments[0].metadata().base_offset(), 0);
+        assert_eq!(closed_segments[1].metadata().base_offset(), 2);
+        assert_eq!(segmented_log.active_segment().metadata().base_offset(), 4);
+        assert_eq!(segmented_log.next_offset(), 6);
+    }
+
+    #[test]
+    fn segmented_log_open_rejects_filename_first_record_mismatch_without_mutation() {
+        let dir = tempfile::tempdir().expect("creating temp dir should succeed");
+        let dir_path = dir.path();
+        let record1 = Record::new(1, 1_700_000_000, None, vec![1, 2, 3]);
+        let closed_path = dir_path.join(SegmentMetadata::filename(0));
+        let active_path = dir_path.join(SegmentMetadata::filename(10));
+        let (mut closed_log, _) = Log::open_active(&closed_path, 0, RecordLimits::default())
+            .expect("opening closed log should succeed");
+
+        closed_log
+            .append(&record1)
+            .expect("appending record 1 should succeed");
+
+        drop(closed_log);
+
+        std::fs::File::create(&active_path).expect("creating active file should succeed");
+
+        let closed_snapshot =
+            std::fs::read(&closed_path).expect("reading closed file should succeed");
+        let active_snapshot =
+            std::fs::read(&active_path).expect("reading active file should succeed");
+
+        let error = SegmentedLog::open(dir_path, RecordLimits::default(), SegmentConfig::default())
+            .expect_err("opening segmented log should fail due to filename/first-record mismatch");
+
+        assert!(matches!(
+            error,
+            StorageError::UnexpectedOffset {
+                expected: 0,
+                actual: 1
+            }
+        ));
+
+        let closed_after = std::fs::read(&closed_path).expect("reading closed file should succeed");
+        let active_after = std::fs::read(&active_path).expect("reading active file should succeed");
+
+        assert_eq!(closed_snapshot, closed_after);
+        assert_eq!(active_snapshot, active_after);
+    }
+
+    #[test]
+    fn segmented_log_open_rejects_closed_record_regression_without_mutation() {
+        let dir = tempfile::tempdir().expect("creating temp dir should succeed");
+        let dir_path = dir.path();
+        let closed_path = dir_path.join(SegmentMetadata::filename(0));
+        let active_path = dir_path.join(SegmentMetadata::filename(2));
+        let record1 = Record::new(0, 1_1700_000_000, None, vec![1, 2, 3]);
+        let record2 = Record::new(1, 1_1700_000_000, None, vec![4, 5, 6]);
+        let record3 = Record::new(0, 1_1700_000_000, None, vec![7, 8, 9]);
+        let encoded1 = record1
+            .encode(&RecordLimits::default())
+            .expect("encoding record 1 should succeed");
+        let encoded2 = record2
+            .encode(&RecordLimits::default())
+            .expect("encoding record 2 should succeed");
+        let encoded3 = record3
+            .encode(&RecordLimits::default())
+            .expect("encoding record 3 should succeed");
+        let closed_data = [encoded1, encoded2, encoded3].concat();
+
+        std::fs::write(&closed_path, &closed_data).expect("writing encoded records should succeed");
+        std::fs::write(&active_path, &[]).expect("writing empty active file should succeed");
+
+        let closed_snapshot =
+            std::fs::read(&closed_path).expect("reading closed file should succeed");
+        let active_snapshot =
+            std::fs::read(&active_path).expect("reading active file should succeed");
+
+        let error = SegmentedLog::open(dir_path, RecordLimits::default(), SegmentConfig::default())
+            .expect_err("opening segmented log with closed record regression should fail");
+
+        assert!(matches!(
+            error,
+            StorageError::UnexpectedOffset {
+                expected: 2,
+                actual: 0
+            }
+        ));
+        assert_eq!(
+            closed_snapshot,
+            std::fs::read(&closed_path).expect("reading closed file should succeed")
+        );
+        assert_eq!(
+            active_snapshot,
+            std::fs::read(&active_path).expect("reading active file should succeed")
+        );
+    }
+
+    #[test]
+    fn segmented_log_open_rejects_corrupt_closed_record_without_mutation() {
+        let dir = tempfile::tempdir().expect("failed to create temporary directory");
+        let dir_path = dir.path();
+        let closed_path = dir_path.join(SegmentMetadata::filename(0));
+        let active_path = dir_path.join(SegmentMetadata::filename(2));
+        let record1 = Record::new(0, 1_700_000_000, None, vec![1, 2, 3]);
+        let record2 = Record::new(1, 1_700_000_001, None, vec![4, 5, 6]);
+        let encoded_record1 = record1
+            .encode(&RecordLimits::default())
+            .expect("encoding record should succeed");
+        let encoded_record1_len =
+            u64::try_from(encoded_record1.len()).expect("record1 length should fit in u64");
+        let encoded_record2 = record2
+            .encode(&RecordLimits::default())
+            .expect("encoding record should succeed");
+        let mutated_encoded_record2 = {
+            let mut bytes = encoded_record2.clone();
+            bytes[0] ^= 0xFF; // Corrupt the first byte
+            bytes
+        };
+        let encoded_records = [
+            encoded_record1.as_slice(),
+            mutated_encoded_record2.as_slice(),
+        ]
+        .concat();
+
+        std::fs::write(&closed_path, &encoded_records).expect("writing closed file should succeed");
+        std::fs::write(&active_path, &[]).expect("writing empty active file should succeed");
+
+        let closed_snapshot =
+            std::fs::read(&closed_path).expect("reading closed file should succeed");
+        let active_snapshot =
+            std::fs::read(&active_path).expect("reading active file should succeed");
+
+        let error = SegmentedLog::open(dir_path, RecordLimits::default(), SegmentConfig::default())
+            .expect_err("opening segmented log should fail due to corrupt record");
+
+        if let StorageError::CorruptRecord {
+            path,
+            byte_position,
+            source,
+        } = error
+        {
+            assert_eq!(path, closed_path);
+            assert_eq!(byte_position, encoded_record1_len);
+            assert!(
+                matches!(source, CodecError::InvalidMagic { .. }),
+                "expected codec error to be CorruptRecord"
+            );
+        } else {
+            panic!("expected CorruptRecord error");
+        }
+
+        assert_eq!(
+            closed_snapshot,
+            std::fs::read(&closed_path).expect("reading closed file should succeed")
+        );
+        assert_eq!(
+            active_snapshot,
+            std::fs::read(&active_path).expect("reading active file should succeed")
+        );
+    }
+
+    #[test]
+    fn segmented_log_open_rejects_incomplete_closed_tail_without_mutation() {
+        let dir = tempfile::tempdir().expect("failed to create temporary directory");
+        let dir_path = dir.path();
+        let closed_path = dir_path.join(SegmentMetadata::filename(0));
+        let active_path = dir_path.join(SegmentMetadata::filename(1));
+        let record0 = Record::new(0, 1_700_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3]);
+        let record1 = Record::new(1, 1_700_000_001, Some(vec![40, 50, 60]), vec![4, 5, 6]);
+        let encoded_record0 = record0
+            .encode(&RecordLimits::default())
+            .expect("encoding record0 should succeed");
+        let encoded_record0_len = u64::try_from(encoded_record0.len())
+            .expect("encoding record0 length should fit in u64");
+        let encoded_record1 = record1
+            .encode(&RecordLimits::default())
+            .expect("encoding record1 should succeed");
+        let incomplete_record_1 = &encoded_record1[..1];
+        let encoded = [&encoded_record0.as_slice(), incomplete_record_1].concat();
+
+        std::fs::write(&closed_path, &encoded).expect("writing closed file should succeed");
+        std::fs::write(&active_path, incomplete_record_1)
+            .expect("writing active file should succeed");
+
+        let closed_snapshot =
+            std::fs::read(&closed_path).expect("reading closed file should succeed");
+        let active_snapshot =
+            std::fs::read(&active_path).expect("reading active file should succeed");
+
+        let error = SegmentedLog::open(dir_path, RecordLimits::default(), SegmentConfig::default())
+            .expect_err("opening segmented log with incomplete closed tail should fail");
+
+        if let StorageError::CorruptRecord {
+            path,
+            byte_position,
+            source,
+        } = error
+        {
+            assert_eq!(path, closed_path);
+            assert_eq!(byte_position, encoded_record0_len);
+            assert!(
+                matches!(source, CodecError::InvalidMagic { .. }),
+                "expected codec error to be CorruptRecord"
+            );
+        } else {
+            panic!("expected CorruptRecord error");
+        }
+        assert_eq!(
+            std::fs::read(&closed_path).expect("reading closed file should succeed"),
+            closed_snapshot,
+            "closed file should not be truncated"
+        );
+        assert_eq!(
+            std::fs::read(&active_path).expect("reading active file should succeed"),
+            active_snapshot,
+            "active file should not be modified"
+        );
+    }
+
+    #[test]
+    fn repeated_multi_segment_restarts_preserve_bytes_records_and_next_offset() {
+        let dir = tempfile::tempdir().expect("failed to create temporary directory");
+        let dir_path = dir.path();
+        let closed_path1 = dir_path.join(SegmentMetadata::filename(0));
+        let closed_path2 = dir_path.join(SegmentMetadata::filename(2));
+        let active_path = dir_path.join(SegmentMetadata::filename(4));
+
+        let record0 = Record::new(0, 1_700_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3]);
+        let record1 = Record::new(1, 1_700_000_001, Some(vec![10, 20, 30]), vec![1, 2, 3]);
+        let record2 = Record::new(2, 1_700_000_002, Some(vec![10, 20, 30]), vec![1, 2, 3]);
+        let record3 = Record::new(3, 1_700_000_003, Some(vec![10, 20, 30]), vec![1, 2, 3]);
+        let record4 = Record::new(4, 1_700_000_004, Some(vec![10, 20, 30]), vec![1, 2, 3]);
+        let record5 = Record::new(5, 1_700_000_005, Some(vec![10, 20, 30]), vec![1, 2, 3]);
+
+        let encoded_record0 = record0
+            .encode(&RecordLimits::default())
+            .expect("encoding record0 should succeed");
+        let encoded_record1 = record1
+            .encode(&RecordLimits::default())
+            .expect("encoding record1 should succeed");
+        let encoded_record2 = record2
+            .encode(&RecordLimits::default())
+            .expect("encoding record2 should succeed");
+        let encoded_record3 = record3
+            .encode(&RecordLimits::default())
+            .expect("encoding record3 should succeed");
+        let encoded_record4 = record4
+            .encode(&RecordLimits::default())
+            .expect("encoding record4 should succeed");
+        let encoded_record5 = record5
+            .encode(&RecordLimits::default())
+            .expect("encoding record5 should succeed");
+
+        let closed_data_1 = [encoded_record0.as_slice(), encoded_record1.as_slice()].concat();
+        let closed_data_2 = [encoded_record2.as_slice(), encoded_record3.as_slice()].concat();
+        let active_data = [encoded_record4.as_slice(), encoded_record5.as_slice()].concat();
+
+        std::fs::write(&closed_path1, &closed_data_1)
+            .expect("writing closed segment 1 should succeed");
+        std::fs::write(&closed_path2, &closed_data_2)
+            .expect("writing closed segment 2 should succeed");
+        std::fs::write(&active_path, &active_data).expect("writing active segment should succeed");
+
+        let closed_snapshot_1 =
+            std::fs::read(&closed_path1).expect("reading closed segment 1 should succeed");
+        let closed_snapshot_2 =
+            std::fs::read(&closed_path2).expect("reading closed segment 2 should succeed");
+        let active_snapshot =
+            std::fs::read(&active_path).expect("reading active segment should succeed");
+
+        for _ in 0..100 {
+            let mut offsets_found = vec![];
+            let segmented_log =
+                SegmentedLog::open(dir_path, RecordLimits::default(), SegmentConfig::default())
+                    .expect("opening segmented log should succeed");
+            assert_eq!(
+                segmented_log.next_offset(),
+                6,
+                "the next offset should be 6 after reopening the segmented log"
+            );
+            let mut asserted_closed_segments = 0;
+            for closed_segment in segmented_log.closed_segments() {
+                let scanner = closed_segment
+                    .scan()
+                    .expect("scanning closed segment should succeed");
+
+                for result in scanner {
+                    let record = result.expect("reading record from scanner should succeed");
+                    offsets_found.push(record.offset());
+                }
+
+                asserted_closed_segments += 1;
+            }
+            assert_eq!(
+                asserted_closed_segments, 2,
+                "there should be exactly 2 closed segments"
+            );
+            assert_eq!(
+                offsets_found,
+                vec![0, 1, 2, 3, 4, 5],
+                "the combined record offsets should be [0, 1, 2, 3, 4, 5]"
+            );
+            assert!(
+                std::fs::read(&closed_path1).expect("reading closed segment 1 should succeed")
+                    == closed_snapshot_1,
+                "closed segment 1 should match its snapshot",
+            );
+            assert!(
+                std::fs::read(&closed_path2).expect("reading closed segment 2 should succeed")
+                    == closed_snapshot_2,
+                "closed segment 2 should match its snapshot",
+            );
+            assert!(
+                std::fs::read(&active_path).expect("reading active segment should succeed")
+                    == active_snapshot,
+                "active segment should match its snapshot",
+            );
+        }
+    }
+
+    #[test]
     fn segmented_log_open_reports_active_length_after_tail_recovery() {
         let dir = tempfile::tempdir().expect("failed to create temporary directory");
+        let dir_path = dir.path();
         let base_offset = 0;
-        let path = dir.path().join(SegmentMetadata::filename(base_offset));
+        let path = dir_path.join(SegmentMetadata::filename(base_offset));
         let limits = RecordLimits::default();
 
         let (mut log, _) = Log::open_active(&path, base_offset, limits)
@@ -1103,7 +1472,7 @@ mod tests {
             "the incomplete tail should increase the file length before recovery"
         );
 
-        let segmented_log = SegmentedLog::open(dir.path(), limits, SegmentConfig::default())
+        let segmented_log = SegmentedLog::open(dir_path, limits, SegmentConfig::default())
             .expect("opening the segmented log should recover its active tail");
         let recovered_byte_len = path
             .metadata()
