@@ -487,7 +487,6 @@ impl SegmentedLog {
 
 #[cfg(test)]
 mod tests {
-    use core::error;
     use std::{
         fs::{self, OpenOptions, read},
         io::Write,
@@ -958,18 +957,11 @@ mod tests {
 
     #[test]
     fn segmented_log_append_advances_offset_and_updates_active_length() {
-        // TODO: Pass dir_path to SegmentedLog::open, not the segment file path.
-        // Remove the unused manual Log/SegmentMetadata setup below and let the owner create
-        // its file. Verify active metadata length as well as physical length after each append.
         let dir = tempfile::tempdir().expect("Failed to create temporary directory");
         let dir_path = dir.path();
         let path = dir_path.join(SegmentMetadata::filename(0));
-        fs::File::create(&path).expect("Failed to create segment file");
-        let (log, _) =
-            Log::open_active(&path, 0, RecordLimits::default()).expect("Failed to open active log");
-        let metadata = SegmentMetadata::new(0, &path, 0);
         let mut segmented_log =
-            SegmentedLog::open(&path, RecordLimits::default(), SegmentConfig::default())
+            SegmentedLog::open(dir_path, RecordLimits::default(), SegmentConfig::default())
                 .expect("Failed to open segmented log");
         let record1 = Record::new(0, 1_700_000_000, None, vec![1, 2, 3]);
         let record2 = Record::new(1, 1_700_000_001, None, vec![4, 5, 6]);
@@ -996,6 +988,11 @@ mod tests {
             "Next offset should be 1 after appending record1"
         );
         assert_eq!(
+            segmented_log.active_segment.metadata.file_len(),
+            record1_len,
+            "Active segment metadata file length should match the length of the appended record1"
+        );
+        assert_eq!(
             std::fs::metadata(&path)
                 .expect("Failed to get segment file metadata")
                 .len(),
@@ -1018,6 +1015,11 @@ mod tests {
                 .len(),
             record1_len + record2_len,
             "Active length should match the accumulated length of appended records"
+        );
+        assert_eq!(
+            segmented_log.active_segment.metadata.file_len(),
+            record1_len + record2_len,
+            "Active segment metadata file length should match the accumulated length of appended records"
         );
 
         let mut scanner = segmented_log.scan().expect("Failed to scan segmented log");
@@ -1043,7 +1045,11 @@ mod tests {
             next_scan_result.is_none(),
             "Next scan result should be None, indicating EOF"
         );
-        todo!("fix directory setup and verify active metadata lengths; see TODO at test start");
+        assert_eq!(
+            segmented_log.active_segment.metadata.file_len(),
+            record1_len + record2_len,
+            "Active segment metadata file length should match the accumulated length of appended records"
+        );
     }
 
     #[test]
@@ -1182,10 +1188,6 @@ mod tests {
 
     #[test]
     fn segmented_log_append_payload_rejection_preserves_next_offset_and_allows_retry() {
-        // TODO: Read the canonical path variable, not dir_path.join("0").
-        // Read bytes again AFTER rejection to prove the failed append preserved them.
-        // Give the valid retry record offset 1 (not 2), since rejection consumes no offset.
-        // Update retry messages accordingly and assert next_offset is 2 after retry.
         let limits = RecordLimits::new(2, 3);
         let dir = tempfile::tempdir().expect("creating temp dir should succeed");
         let dir_path = dir.path();
@@ -1194,7 +1196,7 @@ mod tests {
             .expect("opening segmented log should succeed");
         let record0 = Record::new(0, 1_700_000_000, None, vec![1, 2, 3]);
         let record1 = Record::new(1, 1_700_000_001, None, vec![4, 5, 6, 7]);
-        let record2 = Record::new(2, 1_700_000_002, None, vec![8, 9, 10]);
+        let record2 = Record::new(1, 1_700_000_002, None, vec![8, 9, 10]);
         let expected_file_data = record0
             .encode(&limits)
             .expect("encoding expected file data should succeed");
@@ -1210,12 +1212,16 @@ mod tests {
             .append(&record0)
             .expect("Appending offset 0 should succeed");
 
-        let file_data =
-            std::fs::read(dir_path.join("0")).expect("reading the segment file should succeed");
+        let file_data = std::fs::read(&path).expect("reading the segment file should succeed");
         let error = segmented_log
             .append(&record1)
             .expect_err("Appending oversized payload should fail");
 
+        assert_eq!(
+            std::fs::read(&path).expect("reading the closed segment should succeed"),
+            expected_file_data,
+            "Segment file content should match the expected encoded record"
+        );
         assert!(matches!(
             error,
             StorageError::Codec(CodecError::PayloadTooLarge)
@@ -1244,10 +1250,15 @@ mod tests {
 
         segmented_log
             .append(&record2)
-            .expect("Appending offset 2 should succeed");
+            .expect("Appending offset 1 should succeed");
 
         let file_data_after_record2 =
             std::fs::read(&path).expect("reading the segment file should succeed");
+        assert_eq!(
+            segmented_log.next_offset(),
+            2,
+            "Next offset should be 2 after appending record 2"
+        );
         assert_eq!(
             file_data_after_record2,
             [expected_file_data, record2_file_data].concat(),
@@ -1280,7 +1291,6 @@ mod tests {
 
         assert_eq!(scanned_record0, record0);
         assert_eq!(scanned_record2, record2);
-        todo!("fix snapshot path/timing and retry offset; see TODO at test start");
     }
 
     #[test]
