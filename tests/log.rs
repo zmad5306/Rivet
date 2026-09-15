@@ -3,7 +3,7 @@ mod common;
 use common::sample_record;
 use rivet::error::CodecError;
 use std::error::Error;
-use std::fs::write;
+use std::fs::{self, write};
 use std::fs::{OpenOptions, read};
 use std::io::Write;
 
@@ -17,38 +17,228 @@ use rivet::{
 
 #[test]
 fn create_active_creates_empty_log_and_supports_append_scan_and_reopen() {
-    // TODO: Use a missing file path inside a temporary directory; call Log::create_active.
-    // TODO: Verify the file exists, len() is zero, and scanning immediately reaches EOF.
-    // TODO: Append a record, compare physical bytes with its encoding, and scan its contents.
-    // TODO: Drop the log, reopen with open_active at the record's base offset, and verify
-    // the recovered next offset and record. Reopening must not use create_active.
-    todo!("implement fresh active-log creation and usability test");
+    let dir = tempfile::tempdir().expect("temporary directory should be created");
+    let path = dir.path().join("active-log.log");
+    let mut log = Log::create_active(&path, RecordLimits::default())
+        .expect("creating an active log should succeed");
+    let mut scanner = log
+        .scan()
+        .expect("scanning an empty active log should succeed");
+    let record = sample_record(0);
+    let encoded_record = record
+        .encode(&RecordLimits::default())
+        .expect("encoding the sample record should succeed");
+
+    assert!(path.exists(), "the log file should exist after creation");
+    assert_eq!(
+        fs::metadata(&path)
+            .expect("file metadata should be readable")
+            .len(),
+        0,
+        "the file should be empty after creation"
+    );
+    assert!(
+        scanner.next().is_none(),
+        "scanning an empty active log should immediately reach EOF"
+    );
+
+    log.append(&record)
+        .expect("appending a record should succeed");
+
+    let mut scanner = log
+        .scan()
+        .expect("scanning an active log with one record should succeed");
+    let scanned_record = scanner
+        .next()
+        .expect("there should be a record")
+        .expect("scanning should succeed");
+
+    assert_eq!(scanned_record, record);
+    assert_eq!(
+        fs::read(&path).expect("reading the log file should succeed"),
+        encoded_record,
+        "the physical bytes of the log file should match the encoded record"
+    );
+
+    drop(log);
+
+    let (log, next_offset) = Log::open_active(&path, 0, RecordLimits::default())
+        .expect("reopening the active log should succeed");
+    let mut scanner = log
+        .scan()
+        .expect("scanning a reopened active log should succeed");
+    let scanned_record = scanner
+        .next()
+        .expect("there should be a record")
+        .expect("scanning should succeed");
+    let next_scan_result = scanner.next();
+
+    assert_eq!(scanned_record, record);
+    assert_eq!(
+        next_offset, 1,
+        "the next offset after reopening should reflect the appended record"
+    );
+    assert!(
+        next_scan_result.is_none(),
+        "scanning should reach EOF after the last record"
+    );
 }
 
 #[test]
 fn create_active_rejects_existing_files_without_modifying_bytes() {
-    // TODO: Exercise both an existing empty file and an existing nonempty file.
-    // Use non-record sentinel bytes for the latter to prove creation does not run recovery.
-    // TODO: Snapshot bytes, call create_active, and match StorageError::Io with
-    // ErrorKind::AlreadyExists. Verify the underlying I/O error remains available as source().
-    // TODO: Reread each file and verify its bytes are exactly unchanged.
-    todo!("implement exclusive creation collision test");
+    let dir = tempfile::tempdir().expect("temporary directory should be created");
+    let empty_path = dir.path().join("empty.log");
+    let path = dir.path().join("nonempty.log");
+    let non_record_sentinel = b"non-record sentinel";
+
+    fs::File::create(&empty_path).expect("creating an empty file should succeed");
+    fs::write(&path, non_record_sentinel).expect("creating a nonempty file should succeed");
+
+    let empty_snapshot = fs::read(&empty_path).expect("reading the empty file should succeed");
+    let nonempty_snapshot = fs::read(&path).expect("reading the nonempty file should succeed");
+
+    let error = Log::create_active(&empty_path, RecordLimits::default())
+        .expect_err("creating an active log on an existing empty file should fail");
+
+    assert!(
+        matches!(error, StorageError::Io { .. }),
+        "creating an active log on an existing empty file should return an I/O error"
+    );
+    assert!(
+        error.source().is_some(),
+        "the error should have an underlying I/O error source"
+    );
+    assert_eq!(
+        fs::read(&empty_path).expect("reading the empty file should succeed"),
+        empty_snapshot,
+        "the empty file should remain unchanged"
+    );
+    match &error {
+        StorageError::Io(source, ..) => {
+            assert_eq!(
+                source.kind(),
+                std::io::ErrorKind::AlreadyExists,
+                "the underlying I/O error should indicate the file already exists"
+            );
+        }
+        other => panic!("unexpected error variant: {:?}", other),
+    }
+
+    let error = Log::create_active(&path, RecordLimits::default())
+        .expect_err("creating an active log on an existing nonempty file should fail");
+
+    assert!(
+        matches!(error, StorageError::Io { .. }),
+        "creating an active log on an existing nonempty file should return an I/O error"
+    );
+    assert!(
+        error.source().is_some(),
+        "the error should have an underlying I/O error source"
+    );
+    assert_eq!(
+        fs::read(&empty_path).expect("reading the empty file should succeed"),
+        empty_snapshot,
+        "the empty file should remain unchanged"
+    );
+    assert_eq!(
+        fs::read(&path).expect("reading the nonempty file should succeed"),
+        nonempty_snapshot,
+        "the nonempty file should remain unchanged"
+    );
+    match &error {
+        StorageError::Io(source, ..) => {
+            assert_eq!(
+                source.kind(),
+                std::io::ErrorKind::AlreadyExists,
+                "the underlying I/O error should indicate the file already exists"
+            );
+        }
+        other => panic!("unexpected error variant: {:?}", other),
+    }
 }
 
 #[test]
 fn create_active_preserves_io_error_when_parent_directory_is_missing() {
-    // TODO: Choose a file path beneath a nonexistent child directory of a temporary directory.
-    // TODO: Call create_active; expect StorageError::Io and a preserved I/O error source.
-    // TODO: Verify neither the missing parent directory nor the file was created.
-    todo!("implement active-log creation I/O failure test");
+    let dir = tempfile::tempdir().expect("temporary directory should be created");
+    let missing_parent = dir.path().join("nonexistent");
+    let path = missing_parent.join("log.log");
+
+    let error = Log::create_active(&path, RecordLimits::default())
+        .expect_err("creating an active log with a missing parent directory should fail");
+
+    assert!(
+        matches!(error, StorageError::Io { .. }),
+        "creating an active log with a missing parent directory should return an I/O error"
+    );
+    assert!(
+        error.source().is_some(),
+        "the error should have an underlying I/O error source"
+    );
+    match &error {
+        StorageError::Io(source, ..) => {
+            assert_eq!(
+                source.kind(),
+                std::io::ErrorKind::NotFound,
+                "the underlying I/O error should indicate the parent directory is missing"
+            );
+        }
+        other => panic!("unexpected error variant: {:?}", other),
+    }
+    assert!(
+        !missing_parent.exists(),
+        "the missing parent directory should not have been created"
+    );
+    assert!(!path.exists(), "the log file should not have been created");
 }
 
 #[test]
 fn create_active_preserves_supplied_record_limits() {
-    // TODO: Create a log with a small payload limit, then attempt an oversized record.
-    // TODO: Expect Codec(PayloadTooLarge) and verify the file remains empty.
-    // TODO: Append a record within the limit and scan it to verify normal use still works.
-    todo!("implement created active-log record limits test");
+    let limits = RecordLimits::new(2, 3);
+    let dir = tempfile::tempdir().expect("temporary directory should be created");
+    let path = dir.path().join("active-log-with-limits.log");
+    let oversized_record = Record::new(0, 1_700_000_000, None, vec![1, 2, 3, 4]);
+    let valid_record = Record::new(0, 1_700_000_000, None, vec![1, 2, 3]);
+
+    let mut log = Log::create_active(&path, limits)
+        .expect("creating an active log with specified limits should succeed");
+
+    let error = log
+        .append(&oversized_record)
+        .expect_err("appending an oversized record should fail");
+
+    assert!(
+        matches!(
+            error,
+            StorageError::Codec(CodecError::PayloadTooLarge { .. })
+        ),
+        "appending an oversized record should return a codec error"
+    );
+
+    let file_bytes = read(&path).expect("reading the log file should succeed");
+    assert!(
+        file_bytes.is_empty(),
+        "the log file should be empty after failing to append an oversized record"
+    );
+
+    log.append(&valid_record)
+        .expect("appending a valid record within the limits should succeed");
+
+    let mut scanner = log.scan().expect("scanning the log should succeed");
+    let scanned_record = scanner
+        .next()
+        .expect("scanning should yield a record")
+        .expect("scanning should not produce an error");
+
+    assert_eq!(
+        scanned_record, valid_record,
+        "the scanned record should match the appended valid record"
+    );
+
+    let next_scan_result = scanner.next();
+    assert!(
+        next_scan_result.is_none(),
+        "scanning after the last record should yield None"
+    );
 }
 
 #[test]
