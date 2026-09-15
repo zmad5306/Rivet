@@ -46,6 +46,51 @@ impl Default for SegmentConfig {
     }
 }
 
+pub struct SegmentedLogScanner<'a> {
+    log: &'a SegmentedLog,
+    segment_index: usize,
+    current_scanner: Option<LogScanner<'a>>,
+    finished: bool,
+}
+
+impl<'a> Iterator for SegmentedLogScanner<'a> {
+    type Item = Result<Record, StorageError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.finished {
+            return None;
+        }
+
+        loop {
+            if let Some(scanner) = &mut self.current_scanner {
+                if let Some(result) = scanner.next() {
+                    match result {
+                        Ok(record) => return Some(Ok(record)),
+                        Err(err) => {
+                            self.finished = true;
+                            self.current_scanner = None;
+                            return Some(Err(err));
+                        }
+                    }
+                }
+            }
+
+            self.segment_index += 1;
+            self.current_scanner = match self.log.get_segment_scanner(self.segment_index) {
+                Ok(Some(scanner)) => Some(scanner),
+                Ok(None) => {
+                    self.finished = true;
+                    return None;
+                }
+                Err(err) => {
+                    self.finished = true;
+                    return Some(Err(err));
+                }
+            };
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub struct SegmentMetadata {
     base_offset: u64,
@@ -128,45 +173,25 @@ impl SegmentMetadata {
 }
 
 #[derive(Debug)]
-pub struct ClosedSegment {
+struct ClosedSegment {
     metadata: SegmentMetadata,
     log: Log,
 }
 
 impl ClosedSegment {
-    pub fn new(metadata: SegmentMetadata, log: Log) -> Self {
-        Self { metadata, log }
-    }
-
-    pub fn metadata(&self) -> &SegmentMetadata {
-        &self.metadata
-    }
-
-    pub fn scan(&self) -> Result<LogScanner<'_>, StorageError> {
+    fn scan(&self) -> Result<LogScanner<'_>, StorageError> {
         self.log.scan()
     }
 }
 
 #[derive(Debug)]
-pub struct ActiveSegment {
+struct ActiveSegment {
     metadata: SegmentMetadata,
     log: Log,
 }
 
 impl ActiveSegment {
-    pub fn new(metadata: SegmentMetadata, log: Log) -> Self {
-        Self { metadata, log }
-    }
-
-    pub fn metadata(&self) -> &SegmentMetadata {
-        &self.metadata
-    }
-
-    pub fn scan(&self) -> Result<LogScanner<'_>, StorageError> {
-        self.log.scan()
-    }
-
-    pub fn append(&mut self, record: &Record) -> Result<(), StorageError> {
+    fn append(&mut self, record: &Record) -> Result<(), StorageError> {
         let encoded_len = record.encoded_len()?;
         let encoded_length = u64::try_from(encoded_len)
             .map_err(|_| StorageError::Codec(CodecError::LengthOverflow))?;
@@ -180,6 +205,10 @@ impl ActiveSegment {
         self.metadata.byte_len = future_byte_len;
 
         Ok(())
+    }
+
+    fn scan(&self) -> Result<LogScanner<'_>, StorageError> {
+        self.log.scan()
     }
 }
 
@@ -203,14 +232,6 @@ pub struct SegmentedLog {
 impl SegmentedLog {
     pub fn directory(&self) -> &Path {
         self.directory.as_path()
-    }
-
-    pub fn closed_segments(&self) -> &[ClosedSegment] {
-        &self.closed_segments
-    }
-
-    pub fn active_segment(&self) -> &ActiveSegment {
-        &self.active_segment
     }
 
     pub fn next_offset(&self) -> u64 {
@@ -348,6 +369,66 @@ impl SegmentedLog {
             next_offset,
         })
     }
+
+    fn get_segment_scanner(&self, index: usize) -> Result<Option<LogScanner<'_>>, StorageError> {
+        if index < self.closed_segments.len() {
+            let segment = &self.closed_segments[index];
+            let scanner = segment.scan()?;
+            return Ok(Some(scanner));
+        }
+        if index == self.closed_segments.len() {
+            let segment = &self.active_segment;
+            let scanner = segment.scan()?;
+            return Ok(Some(scanner));
+        }
+        Ok(None)
+    }
+
+    pub fn append(&mut self, record: &Record) -> Result<(), StorageError> {
+        self.active_segment.append(record)?;
+        Ok(())
+    }
+
+    pub fn scan(&self) -> Result<SegmentedLogScanner<'_>, StorageError> {
+        let scanner = SegmentedLogScanner {
+            segment_index: 0,
+            current_scanner: self.get_segment_scanner(0)?.take(),
+            finished: false,
+            log: &self,
+        };
+        Ok(scanner)
+    }
+
+    pub fn read(&self, offset: u64) -> Result<Option<Record>, StorageError> {
+        let index = if offset >= self.active_segment.metadata.base_offset() {
+            self.closed_segments.len()
+        } else {
+            match self
+                .closed_segments
+                .iter()
+                .rposition(|segment| segment.metadata.base_offset() <= offset)
+            {
+                Some(idx) => idx,
+                None => return Ok(None),
+            }
+        };
+
+        let scanner = self
+            .get_segment_scanner(index)?
+            .expect("selected segment index must exist");
+
+        for result in scanner {
+            let rec = result?;
+            if rec.offset() == offset {
+                return Ok(Some(rec));
+            }
+            if rec.offset() > offset {
+                return Ok(None);
+            }
+        }
+
+        Ok(None)
+    }
 }
 
 #[cfg(test)]
@@ -355,7 +436,7 @@ mod tests {
     use std::{
         fs::{self, OpenOptions, read},
         io::Write,
-        path::Path,
+        path::{self, Path},
         vec,
     };
 
@@ -448,20 +529,20 @@ mod tests {
         let (log, _) = Log::open_closed(&path, base_offset, RecordLimits::default())
             .expect("reopening the log should succeed");
         let metadata = SegmentMetadata::new(base_offset, &path, file_len);
-        let closed_segment = ClosedSegment::new(metadata, log);
+        let closed_segment = ClosedSegment { metadata, log };
 
         assert_eq!(
-            closed_segment.metadata().base_offset(),
+            closed_segment.metadata.base_offset(),
             base_offset,
             "ClosedSegment should expose the correct base offset"
         );
         assert_eq!(
-            closed_segment.metadata().path(),
+            closed_segment.metadata.path(),
             path,
             "ClosedSegment should expose the correct path"
         );
         assert_eq!(
-            closed_segment.metadata().byte_len(),
+            closed_segment.metadata.byte_len(),
             file_len,
             "ClosedSegment should expose the correct file length"
         );
@@ -478,8 +559,8 @@ mod tests {
         let byte_length = u64::try_from(byte_len).expect("byte length should fit in u64");
         let base_offset = 0;
         let metadata = SegmentMetadata::new(base_offset, &path, byte_length);
-        let active_segment = ActiveSegment::new(metadata, log);
-        let exposed_metadata = active_segment.metadata();
+        let active_segment = ActiveSegment { metadata, log };
+        let exposed_metadata = active_segment.metadata;
         assert_eq!(
             exposed_metadata.base_offset(),
             base_offset,
@@ -506,7 +587,7 @@ mod tests {
         let metadata = SegmentMetadata::new(0, &path, 0);
         let (log, _) = Log::open_active(&path, 0, RecordLimits::default())
             .expect("opening a missing log path should succeed");
-        let mut active_segment = ActiveSegment::new(metadata, log);
+        let mut active_segment = ActiveSegment { metadata, log };
         let record1 = Record::new(0, 1_700_000_000, None, vec![1, 2, 3]);
         let record2 = Record::new(1, 1_700_000_001, None, vec![4, 5, 6]);
         let record1_encoded_len = u64::try_from(
@@ -527,7 +608,7 @@ mod tests {
             .expect("appending record1 should succeed");
 
         assert_eq!(
-            active_segment.metadata().byte_len(),
+            active_segment.metadata.byte_len(),
             record1_encoded_len,
             "ActiveSegment byte length should be updated after appending record1"
         );
@@ -537,7 +618,7 @@ mod tests {
             .expect("appending record2 should succeed");
 
         assert_eq!(
-            active_segment.metadata().byte_len(),
+            active_segment.metadata.byte_len(),
             record1_encoded_len + record2_encoded_len,
             "ActiveSegment byte length should be updated after appending record2"
         );
@@ -588,7 +669,7 @@ mod tests {
         let (log, _) =
             Log::open_active(&path, 0, limits).expect("opening the active log should succeed");
         let metadata = SegmentMetadata::new(0, &path, 0);
-        let mut active_segment = ActiveSegment::new(metadata, log);
+        let mut active_segment = ActiveSegment { metadata, log };
         let initial_file_bytes =
             fs::read(&path).expect("reading initial file bytes should succeed");
         let record1 = Record::new(0, 1_700_000_000, None, vec![1, 2, 3, 4]);
@@ -607,7 +688,7 @@ mod tests {
             "File bytes should remain unchanged after a rejected append"
         );
         assert_eq!(
-            active_segment.metadata().byte_len(),
+            active_segment.metadata.byte_len(),
             0,
             "Metadata byte length should remain unchanged after a rejected append"
         );
@@ -629,7 +710,7 @@ mod tests {
             "File bytes should reflect the successfully appended record"
         );
         assert_eq!(
-            active_segment.metadata().byte_len(),
+            active_segment.metadata.byte_len(),
             record2_encoded_len,
             "Metadata byte length should reflect the successfully appended record"
         );
@@ -643,7 +724,7 @@ mod tests {
         let (log, _) = Log::open_active(&path, 0, RecordLimits::default())
             .expect("opening active log should succeed");
         let metadata = SegmentMetadata::new(0, &path, u64::MAX);
-        let mut active_segment = ActiveSegment::new(metadata, log);
+        let mut active_segment = ActiveSegment { metadata, log };
         let record = Record::new(0, 1_700_000_000, None, vec![5, 6, 7]);
         let error = active_segment
             .append(&record)
@@ -653,7 +734,7 @@ mod tests {
             "Expected a LengthOverflow error"
         );
         assert_eq!(
-            active_segment.metadata().byte_len(),
+            active_segment.metadata.byte_len(),
             u64::MAX,
             "Metadata byte length should remain u64::MAX after a failed append"
         );
@@ -819,6 +900,258 @@ mod tests {
     }
 
     #[test]
+    fn segmented_log_append_advances_offset_and_updates_active_length() {
+        let dir = tempfile::tempdir().expect("Failed to create temporary directory");
+        let dir_path = dir.path();
+        let path = dir_path.join(SegmentMetadata::filename(0));
+        fs::File::create(&path).expect("Failed to create segment file");
+        let (log, _) =
+            Log::open_active(&path, 0, RecordLimits::default()).expect("Failed to open active log");
+        let metadata = SegmentMetadata::new(0, &path, 0);
+        let mut segmented_log =
+            SegmentedLog::open(&path, RecordLimits::default(), SegmentConfig::default())
+                .expect("Failed to open segmented log");
+        let record1 = Record::new(0, 1_700_000_000, None, vec![1, 2, 3]);
+        let record2 = Record::new(1, 1_700_000_001, None, vec![4, 5, 6]);
+        let record1_len = u64::try_from(
+            record1
+                .encoded_len()
+                .expect("Failed to get encoded length of record1"),
+        )
+        .expect("Failed to convert record1 length to u64");
+        let record2_len = u64::try_from(
+            record2
+                .encoded_len()
+                .expect("Failed to get encoded length of record2"),
+        )
+        .expect("Failed to convert record2 length to u64");
+
+        segmented_log
+            .append(&record1)
+            .expect("Failed to append record1");
+
+        assert_eq!(
+            segmented_log.next_offset(),
+            1,
+            "Next offset should be 1 after appending record1"
+        );
+        assert_eq!(
+            std::fs::metadata(&path)
+                .expect("Failed to get segment file metadata")
+                .len(),
+            record1_len,
+            "Active length should match the length of the appended record1"
+        );
+
+        segmented_log
+            .append(&record2)
+            .expect("Failed to append record2");
+
+        assert_eq!(
+            segmented_log.next_offset(),
+            2,
+            "Next offset should be 2 after appending record2"
+        );
+        assert_eq!(
+            std::fs::metadata(&path)
+                .expect("Failed to get segment file metadata")
+                .len(),
+            record1_len + record2_len,
+            "Active length should match the accumulated length of appended records"
+        );
+
+        let mut scanner = segmented_log.scan().expect("Failed to scan segmented log");
+        let scanned_record1 = scanner
+            .next()
+            .expect("Failed to get first scanned record")
+            .expect("Expected a record");
+        let scanned_record2 = scanner
+            .next()
+            .expect("Failed to get second scanned record")
+            .expect("Expected a record");
+        let next_scan_result = scanner.next();
+
+        assert_eq!(
+            scanned_record1, record1,
+            "First scanned record should match record1"
+        );
+        assert_eq!(
+            scanned_record2, record2,
+            "Second scanned record should match record2"
+        );
+        assert!(
+            next_scan_result.is_none(),
+            "Next scan result should be None, indicating EOF"
+        );
+    }
+
+    #[test]
+    fn segmented_log_append_rejects_unexpected_offsets_without_mutation() {
+        let dir = tempfile::tempdir()
+            .expect("Failed to create temporary directory for segmented log test");
+        let dir_path = dir.path();
+        let path = dir_path.join(SegmentMetadata::filename(0));
+        let mut segmented_log =
+            SegmentedLog::open(dir_path, RecordLimits::default(), SegmentConfig::default())
+                .expect("Failed to open segmented log");
+        let record = Record::new(0, 1_700_000_000, None, vec![1, 2, 3]);
+        let expected_file_content = record
+            .encode(&RecordLimits::default())
+            .expect("Failed to encode record");
+        let expected_file_len = u64::try_from(expected_file_content.len())
+            .expect("Failed to convert expected file content length to u64");
+
+        segmented_log
+            .append(&record)
+            .expect("Failed to append record");
+
+        assert_eq!(
+            std::fs::read(&path).expect("reading the closed segment should succeed"),
+            expected_file_content,
+            "Segment file content should match the expected encoded record"
+        );
+
+        let file_len_snapshot = std::fs::metadata(&path)
+            .expect("Failed to get segment file metadata")
+            .len();
+        let next_offset_snapshot = segmented_log.next_offset();
+
+        assert_eq!(
+            file_len_snapshot, expected_file_len,
+            "Segment file length should match the expected encoded record length"
+        );
+        assert_eq!(
+            next_offset_snapshot, 1,
+            "Next offset should be 1 after appending the first record"
+        );
+
+        let offset_zero_record = Record::new(0, 1_700_000_000, None, vec![4, 5, 6]);
+
+        let error = segmented_log
+            .append(&offset_zero_record)
+            .expect_err("Appending an unexpected offset should fail");
+
+        assert!(
+            matches!(
+                error,
+                StorageError::UnexpectedOffset {
+                    expected: 1,
+                    actual: 0
+                }
+            ),
+            "Error should be UnexpectedOffset with expected 1 and actual 0"
+        );
+        assert_eq!(
+            std::fs::read(&path).expect("reading the closed segment should succeed"),
+            expected_file_content,
+            "Segment file content should match the expected encoded record"
+        );
+        assert_eq!(
+            segmented_log.active_segment.metadata.byte_len, expected_file_len,
+            "Active segment metadata byte length should match the expected encoded record length"
+        );
+        assert_eq!(
+            segmented_log.next_offset(),
+            1,
+            "Next offset should remain 1 after failed append"
+        );
+
+        let offset_two_record = Record::new(2, 1_700_000_000, None, vec![7, 8, 9]);
+
+        let error = segmented_log
+            .append(&offset_two_record)
+            .expect_err("Appending an unexpected offset should fail");
+
+        assert!(
+            matches!(
+                error,
+                StorageError::UnexpectedOffset {
+                    expected: 1,
+                    actual: 2
+                }
+            ),
+            "Error should be UnexpectedOffset with expected 1 and actual 2"
+        );
+        assert_eq!(
+            std::fs::read(&path).expect("reading the closed segment should succeed"),
+            expected_file_content,
+            "Segment file content should match the expected encoded record"
+        );
+        assert_eq!(
+            segmented_log.active_segment.metadata.byte_len, expected_file_len,
+            "Active segment metadata byte length should match the expected encoded record length"
+        );
+        assert_eq!(
+            segmented_log.next_offset(),
+            1,
+            "Next offset should remain 1 after failed append"
+        );
+
+        let offset_one_record = Record::new(1, 1_700_000_000, None, vec![10, 11, 12]);
+        segmented_log
+            .append(&offset_one_record)
+            .expect("Appending offset 1 should succeed");
+
+        let offset_one_record_bytes = offset_one_record
+            .encode(&RecordLimits::default())
+            .expect("encoding offset one record should succeed");
+        let offset_one_record_len = u64::try_from(offset_one_record_bytes.len())
+            .expect("converting offset one record length to u64 should succeed");
+
+        assert_eq!(
+            std::fs::read(&path).expect("reading the closed segment should succeed"),
+            [
+                expected_file_content.as_slice(),
+                offset_one_record_bytes.as_slice()
+            ]
+            .concat(),
+            "Segment file content should match the expected encoded record"
+        );
+        assert_eq!(
+            segmented_log.active_segment.metadata.byte_len,
+            expected_file_len + offset_one_record_len,
+            "Active segment metadata byte length should match the expected encoded record length"
+        );
+        assert_eq!(
+            segmented_log.next_offset(),
+            2,
+            "Next offset should be 2 after successful append of offset 1"
+        );
+    }
+
+    #[test]
+    fn segmented_log_append_payload_rejection_preserves_next_offset_and_allows_retry() {
+        // TODO: Open a SegmentedLog with a small RecordLimits payload maximum.
+        // TODO: Append a valid record at offset 0 and snapshot bytes and active metadata.
+        // TODO: Attempt an oversized payload at offset 1; expect Codec(PayloadTooLarge).
+        // TODO: Assert next_offset remains 1, and bytes and metadata length are unchanged.
+        // TODO: Append a valid record at offset 1; verify next_offset is 2 and scanning
+        // returns only the two successful records.
+        todo!("implement segmented append payload rejection test");
+    }
+
+    #[test]
+    fn segmented_log_append_offset_overflow_does_not_write() {
+        // TODO: Open a fresh SegmentedLog and set its private next_offset to u64::MAX.
+        // This synthetic state exercises checked arithmetic without writing a huge log.
+        // TODO: Attempt to append a valid record whose offset is u64::MAX.
+        // TODO: Expect StorageError::OffsetOverflow; assert next_offset remains u64::MAX,
+        // active metadata length stays zero, and the physical file stays empty.
+        todo!("implement segmented append offset overflow test");
+    }
+
+    #[test]
+    fn segmented_log_append_restart_restores_records_and_continues_offsets() {
+        // TODO: Open a fresh SegmentedLog with a threshold above these records' total size.
+        // TODO: Append records at offsets 0 and 1, then drop the owner to close its files.
+        // TODO: Reopen the same directory with the same limits and configuration.
+        // TODO: Verify next_offset is 2, metadata matches physical length, and scanning
+        // the active segment returns the original records unchanged.
+        // TODO: Append offset 2, verify next_offset is 3, and scan all three records.
+        todo!("implement segmented append restart test");
+    }
+
+    #[test]
     fn segmented_log_exposes_supplied_state_without_mutable_access() {
         let base_offset = 0;
         let dir = tempfile::tempdir().expect("temporary directory should be created");
@@ -848,8 +1181,14 @@ mod tests {
             .expect("active log should be opened successfully");
         let closed_metadata = SegmentMetadata::new(base_offset, &closed_path, closed_file_len);
         let active_metadata = SegmentMetadata::new(base_offset + 1, &active_path, 0);
-        let closed_segment = ClosedSegment::new(closed_metadata, closed_log);
-        let active_segment = ActiveSegment::new(active_metadata, active_log);
+        let closed_segment = ClosedSegment {
+            metadata: closed_metadata,
+            log: closed_log,
+        };
+        let active_segment = ActiveSegment {
+            metadata: active_metadata,
+            log: active_log,
+        };
         let segmented_log = SegmentedLog {
             directory: dir_path.to_path_buf(),
             closed_segments: vec![closed_segment],
@@ -866,22 +1205,22 @@ mod tests {
         );
 
         assert_eq!(
-            segmented_log.closed_segments().len(),
+            segmented_log.closed_segments.len(),
             1,
             "segmented log should contain one closed segment"
         );
 
-        let exposed_closed = &segmented_log.closed_segments()[0];
+        let exposed_closed = &segmented_log.closed_segments[0];
 
-        assert_eq!(exposed_closed.metadata().base_offset(), 0);
-        assert_eq!(exposed_closed.metadata().path(), closed_path);
-        assert_eq!(exposed_closed.metadata().byte_len(), closed_file_len);
+        assert_eq!(exposed_closed.metadata.base_offset(), 0);
+        assert_eq!(exposed_closed.metadata.path(), closed_path);
+        assert_eq!(exposed_closed.metadata.byte_len(), closed_file_len);
 
-        let exposed_active = segmented_log.active_segment();
+        let exposed_active = &segmented_log.active_segment;
 
-        assert_eq!(exposed_active.metadata().base_offset(), 1);
-        assert_eq!(exposed_active.metadata().path(), active_path);
-        assert_eq!(exposed_active.metadata().byte_len(), 0);
+        assert_eq!(exposed_active.metadata.base_offset(), 1);
+        assert_eq!(exposed_active.metadata.path(), active_path);
+        assert_eq!(exposed_active.metadata.byte_len(), 0);
 
         assert_eq!(
             segmented_log.next_offset(),
@@ -923,14 +1262,14 @@ mod tests {
             "the segment path should exist after opening the segmented log"
         );
         assert!(
-            segmented_log.closed_segments().is_empty(),
+            segmented_log.closed_segments.is_empty(),
             "there should be no closed segments initially"
         );
 
-        let active_segment = segmented_log.active_segment();
-        assert_eq!(active_segment.metadata().base_offset(), 0);
-        assert_eq!(active_segment.metadata().path(), path);
-        assert_eq!(active_segment.metadata().byte_len(), 0);
+        let active_segment = &segmented_log.active_segment;
+        assert_eq!(active_segment.metadata.base_offset(), 0);
+        assert_eq!(active_segment.metadata.path(), path);
+        assert_eq!(active_segment.metadata.byte_len(), 0);
 
         assert_eq!(segmented_log.next_offset(), 0);
         assert_eq!(segmented_log.limits(), RecordLimits::default());
@@ -1066,13 +1405,13 @@ mod tests {
             .expect("opening the segmented log should succeed");
 
         assert_eq!(
-            segmented_log.closed_segments().len(),
+            segmented_log.closed_segments.len(),
             2,
             "Unexpected number of closed segments"
         );
         assert_eq!(
             segmented_log
-                .closed_segments()
+                .closed_segments
                 .iter()
                 .map(|segment| segment.metadata.base_offset())
                 .collect::<Vec<_>>(),
@@ -1080,7 +1419,7 @@ mod tests {
             "Closed segments do not have the expected base offsets"
         );
         assert_eq!(
-            segmented_log.active_segment().metadata.base_offset(),
+            segmented_log.active_segment.metadata.base_offset(),
             base_offset_2,
             "Active segment does not have the expected base offset"
         );
@@ -1292,10 +1631,10 @@ mod tests {
             SegmentedLog::open(dir_path, RecordLimits::default(), SegmentConfig::default())
                 .expect("opening the segmented log should succeed");
 
-        let closed_segments = segmented_log.closed_segments();
-        assert_eq!(closed_segments[0].metadata().base_offset(), 0);
-        assert_eq!(closed_segments[1].metadata().base_offset(), 2);
-        assert_eq!(segmented_log.active_segment().metadata().base_offset(), 4);
+        let closed_segments = &segmented_log.closed_segments;
+        assert_eq!(closed_segments[0].metadata.base_offset(), 0);
+        assert_eq!(closed_segments[1].metadata.base_offset(), 2);
+        assert_eq!(segmented_log.active_segment.metadata.base_offset(), 4);
         assert_eq!(segmented_log.next_offset(), 6);
     }
 
@@ -1561,7 +1900,7 @@ mod tests {
             );
             let mut asserted_closed_segments = 0;
             let mut asserted_active_segment = 0;
-            for closed_segment in segmented_log.closed_segments() {
+            for closed_segment in segmented_log.closed_segments {
                 let scanner = closed_segment
                     .scan()
                     .expect("scanning closed segment should succeed");
@@ -1573,7 +1912,7 @@ mod tests {
 
                 asserted_closed_segments += 1;
             }
-            let active_segment = segmented_log.active_segment();
+            let active_segment = segmented_log.active_segment;
             let scanner = active_segment
                 .scan()
                 .expect("scanning active segment should succeed");
@@ -1677,7 +2016,7 @@ mod tests {
             "active recovery should truncate only the incomplete tail"
         );
         assert_eq!(
-            segmented_log.active_segment().metadata().byte_len(),
+            segmented_log.active_segment.metadata.byte_len(),
             valid_byte_len,
             "active metadata should report the post-recovery file length"
         );
