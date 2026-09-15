@@ -328,6 +328,7 @@ impl Log {
         }
 
         let bytes = record.encode(&self.limits)?;
+        self.file.seek(SeekFrom::End(0))?;
         Self::write_record(&mut self.file, &mut self.append_failed, &bytes)
     }
 
