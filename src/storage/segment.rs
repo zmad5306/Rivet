@@ -339,7 +339,7 @@ mod tests {
     use std::{
         fs::{OpenOptions, read},
         io::Write,
-        path::{Path},
+        path::Path,
         vec,
     };
 
@@ -732,7 +732,7 @@ mod tests {
         );
 
         let segmented_log =
-            SegmentedLog::open(&dir_path, RecordLimits::default(), SegmentConfig::default())
+            SegmentedLog::open(dir_path, RecordLimits::default(), SegmentConfig::default())
                 .expect("failed to open segmented log");
 
         assert!(
@@ -746,7 +746,7 @@ mod tests {
 
         let active_segment = segmented_log.active_segment();
         assert_eq!(active_segment.metadata().base_offset(), 0);
-        assert_eq!(active_segment.metadata().path(), dir_path);
+        assert_eq!(active_segment.metadata().path(), path);
         assert_eq!(active_segment.metadata().byte_len(), 0);
 
         assert_eq!(segmented_log.next_offset(), 0);
@@ -1070,14 +1070,14 @@ mod tests {
         let record_5 = Record::new(5, 1_700_000_005, None, vec![16, 17, 18]);
 
         let closed_segment_0 = dir_path.join(SegmentMetadata::filename(0));
-        let closed_segment_1 = dir_path.join(SegmentMetadata::filename(1));
-        let active_segment = dir_path.join(SegmentMetadata::filename(2));
+        let closed_segment_1 = dir_path.join(SegmentMetadata::filename(2));
+        let active_segment = dir_path.join(SegmentMetadata::filename(4));
 
         let (mut closed_log_0, _) = Log::open_active(&closed_segment_0, 0, RecordLimits::default())
             .expect("opening the closed segment should succeed");
-        let (mut closed_log_1, _) = Log::open_active(&closed_segment_1, 1, RecordLimits::default())
+        let (mut closed_log_1, _) = Log::open_active(&closed_segment_1, 2, RecordLimits::default())
             .expect("opening the closed segment should succeed");
-        let (mut active_log, _) = Log::open_active(&active_segment, 2, RecordLimits::default())
+        let (mut active_log, _) = Log::open_active(&active_segment, 4, RecordLimits::default())
             .expect("opening the active segment should succeed");
 
         closed_log_0
@@ -1163,9 +1163,9 @@ mod tests {
         let dir_path = dir.path();
         let closed_path = dir_path.join(SegmentMetadata::filename(0));
         let active_path = dir_path.join(SegmentMetadata::filename(2));
-        let record1 = Record::new(0, 1_1700_000_000, None, vec![1, 2, 3]);
-        let record2 = Record::new(1, 1_1700_000_000, None, vec![4, 5, 6]);
-        let record3 = Record::new(0, 1_1700_000_000, None, vec![7, 8, 9]);
+        let record1 = Record::new(0, 1_700_000_000, None, vec![1, 2, 3]);
+        let record2 = Record::new(1, 1_700_000_000, None, vec![4, 5, 6]);
+        let record3 = Record::new(0, 1_700_000_000, None, vec![7, 8, 9]);
         let encoded1 = record1
             .encode(&RecordLimits::default())
             .expect("encoding record 1 should succeed");
@@ -1178,7 +1178,7 @@ mod tests {
         let closed_data = [encoded1, encoded2, encoded3].concat();
 
         std::fs::write(&closed_path, &closed_data).expect("writing encoded records should succeed");
-        std::fs::write(&active_path, &[]).expect("writing empty active file should succeed");
+        std::fs::write(&active_path, []).expect("writing empty active file should succeed");
 
         let closed_snapshot =
             std::fs::read(&closed_path).expect("reading closed file should succeed");
@@ -1233,7 +1233,7 @@ mod tests {
         .concat();
 
         std::fs::write(&closed_path, &encoded_records).expect("writing closed file should succeed");
-        std::fs::write(&active_path, &[]).expect("writing empty active file should succeed");
+        std::fs::write(&active_path, []).expect("writing empty active file should succeed");
 
         let closed_snapshot =
             std::fs::read(&closed_path).expect("reading closed file should succeed");
@@ -1252,7 +1252,7 @@ mod tests {
             assert_eq!(path, closed_path);
             assert_eq!(byte_position, encoded_record1_len);
             assert!(
-                matches!(source, CodecError::InvalidMagic { .. }),
+                matches!(source, CodecError::InvalidMagic),
                 "expected codec error to be CorruptRecord"
             );
         } else {
@@ -1280,13 +1280,11 @@ mod tests {
         let encoded_record0 = record0
             .encode(&RecordLimits::default())
             .expect("encoding record0 should succeed");
-        let encoded_record0_len = u64::try_from(encoded_record0.len())
-            .expect("encoding record0 length should fit in u64");
         let encoded_record1 = record1
             .encode(&RecordLimits::default())
             .expect("encoding record1 should succeed");
         let incomplete_record_1 = &encoded_record1[..1];
-        let encoded = [&encoded_record0.as_slice(), incomplete_record_1].concat();
+        let encoded = [encoded_record0.as_slice(), incomplete_record_1].concat();
 
         std::fs::write(&closed_path, &encoded).expect("writing closed file should succeed");
         std::fs::write(&active_path, incomplete_record_1)
@@ -1300,21 +1298,10 @@ mod tests {
         let error = SegmentedLog::open(dir_path, RecordLimits::default(), SegmentConfig::default())
             .expect_err("opening segmented log with incomplete closed tail should fail");
 
-        if let StorageError::CorruptRecord {
-            path,
-            byte_position,
-            source,
-        } = error
-        {
-            assert_eq!(path, closed_path);
-            assert_eq!(byte_position, encoded_record0_len);
-            assert!(
-                matches!(source, CodecError::InvalidMagic { .. }),
-                "expected codec error to be CorruptRecord"
-            );
-        } else {
-            panic!("expected CorruptRecord error");
-        }
+        assert!(matches!(
+            error,
+            StorageError::Codec(CodecError::IncompleteHeader)
+        ));
         assert_eq!(
             std::fs::read(&closed_path).expect("reading closed file should succeed"),
             closed_snapshot,
@@ -1377,6 +1364,7 @@ mod tests {
             std::fs::read(&closed_path2).expect("reading closed segment 2 should succeed");
         let active_snapshot =
             std::fs::read(&active_path).expect("reading active segment should succeed");
+        let mut sucessful_iterations = 0;
 
         for _ in 0..100 {
             let mut offsets_found = vec![];
@@ -1389,6 +1377,7 @@ mod tests {
                 "the next offset should be 6 after reopening the segmented log"
             );
             let mut asserted_closed_segments = 0;
+            let mut asserted_active_segment = 0;
             for closed_segment in segmented_log.closed_segments() {
                 let scanner = closed_segment
                     .scan()
@@ -1401,6 +1390,15 @@ mod tests {
 
                 asserted_closed_segments += 1;
             }
+            let active_segment = segmented_log.active_segment();
+            let log = active_segment.log();
+            let scanner = log.scan().expect("scanning active segment should succeed");
+            for result in scanner {
+                let record = result.expect("reading record from scanner should succeed");
+                offsets_found.push(record.offset());
+            }
+            asserted_active_segment += 1;
+
             assert_eq!(
                 asserted_closed_segments, 2,
                 "there should be exactly 2 closed segments"
@@ -1409,6 +1407,10 @@ mod tests {
                 offsets_found,
                 vec![0, 1, 2, 3, 4, 5],
                 "the combined record offsets should be [0, 1, 2, 3, 4, 5]"
+            );
+            assert_eq!(
+                asserted_active_segment, 1,
+                "there should be exactly 1 active segment"
             );
             assert!(
                 std::fs::read(&closed_path1).expect("reading closed segment 1 should succeed")
@@ -1425,7 +1427,14 @@ mod tests {
                     == active_snapshot,
                 "active segment should match its snapshot",
             );
+
+            sucessful_iterations += 1;
         }
+
+        assert_eq!(
+            sucessful_iterations, 100,
+            "there should be exactly 100 successful iterations"
+        );
     }
 
     #[test]
