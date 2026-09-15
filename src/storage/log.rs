@@ -273,6 +273,23 @@ impl Log {
         Ok(next_offset)
     }
 
+    pub fn create_active(path: &Path, limits: RecordLimits) -> Result<Self, StorageError> {
+        let file = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .read(true)
+            .open(path)?;
+
+        let log = Log {
+            file,
+            path: path.to_path_buf(),
+            limits,
+            append_failed: false,
+        };
+
+        Ok(log)
+    }
+
     pub fn open_active(
         path: &Path,
         base_offset: u64,

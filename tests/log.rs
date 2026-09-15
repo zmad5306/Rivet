@@ -16,6 +16,42 @@ use rivet::{
 };
 
 #[test]
+fn create_active_creates_empty_log_and_supports_append_scan_and_reopen() {
+    // TODO: Use a missing file path inside a temporary directory; call Log::create_active.
+    // TODO: Verify the file exists, len() is zero, and scanning immediately reaches EOF.
+    // TODO: Append a record, compare physical bytes with its encoding, and scan its contents.
+    // TODO: Drop the log, reopen with open_active at the record's base offset, and verify
+    // the recovered next offset and record. Reopening must not use create_active.
+    todo!("implement fresh active-log creation and usability test");
+}
+
+#[test]
+fn create_active_rejects_existing_files_without_modifying_bytes() {
+    // TODO: Exercise both an existing empty file and an existing nonempty file.
+    // Use non-record sentinel bytes for the latter to prove creation does not run recovery.
+    // TODO: Snapshot bytes, call create_active, and match StorageError::Io with
+    // ErrorKind::AlreadyExists. Verify the underlying I/O error remains available as source().
+    // TODO: Reread each file and verify its bytes are exactly unchanged.
+    todo!("implement exclusive creation collision test");
+}
+
+#[test]
+fn create_active_preserves_io_error_when_parent_directory_is_missing() {
+    // TODO: Choose a file path beneath a nonexistent child directory of a temporary directory.
+    // TODO: Call create_active; expect StorageError::Io and a preserved I/O error source.
+    // TODO: Verify neither the missing parent directory nor the file was created.
+    todo!("implement active-log creation I/O failure test");
+}
+
+#[test]
+fn create_active_preserves_supplied_record_limits() {
+    // TODO: Create a log with a small payload limit, then attempt an oversized record.
+    // TODO: Expect Codec(PayloadTooLarge) and verify the file remains empty.
+    // TODO: Append a record within the limit and scan it to verify normal use still works.
+    todo!("implement created active-log record limits test");
+}
+
+#[test]
 fn opening_new_log_creates_empty_file() {
     let dir = tempfile::tempdir().expect("temporary directory should be created");
     let path = dir.path().join("new-log.log");
