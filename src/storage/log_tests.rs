@@ -1,19 +1,20 @@
-mod common;
-
-use common::sample_record;
-use rivet::error::CodecError;
+use crate::error::CodecError;
 use std::error::Error;
 use std::fs::{self, write};
 use std::fs::{OpenOptions, read};
 use std::io::Write;
 
-use rivet::{
+use crate::{
     error::StorageError,
     storage::{
         log::Log,
         record::{Record, RecordLimits},
     },
 };
+
+fn sample_record(offset: u64) -> Record {
+    Record::new(offset, 1_700_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3])
+}
 
 #[test]
 fn create_active_creates_empty_log_and_supports_append_scan_and_reopen() {
@@ -207,10 +208,7 @@ fn create_active_preserves_supplied_record_limits() {
         .expect_err("appending an oversized record should fail");
 
     assert!(
-        matches!(
-            error,
-            StorageError::Codec(CodecError::PayloadTooLarge { .. })
-        ),
+        matches!(error, StorageError::Codec(CodecError::PayloadTooLarge)),
         "appending an oversized record should return a codec error"
     );
 

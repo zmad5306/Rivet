@@ -92,14 +92,14 @@ impl<'a> Iterator for SegmentedLogScanner<'a> {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub struct SegmentMetadata {
+struct SegmentMetadata {
     base_offset: u64,
     path: PathBuf,
     file_len: u64,
 }
 
 impl SegmentMetadata {
-    pub fn new(base_offset: u64, path: &Path, file_len: u64) -> Self {
+    fn new(base_offset: u64, path: &Path, file_len: u64) -> Self {
         Self {
             base_offset,
             path: path.to_path_buf(),
@@ -107,23 +107,19 @@ impl SegmentMetadata {
         }
     }
 
-    pub fn base_offset(&self) -> u64 {
+    fn base_offset(&self) -> u64 {
         self.base_offset
     }
 
-    pub fn path(&self) -> &Path {
-        &self.path
-    }
-
-    pub fn file_len(&self) -> u64 {
+    fn file_len(&self) -> u64 {
         self.file_len
     }
 
-    pub fn filename(base_offset: u64) -> String {
+    fn filename(base_offset: u64) -> String {
         format!("{base_offset:020}.log")
     }
 
-    pub fn parse_base_offset(path: &Path) -> Result<u64, StorageError> {
+    fn parse_base_offset(path: &Path) -> Result<u64, StorageError> {
         let filename = match path.file_name() {
             Some(filename) => match filename.to_str() {
                 Some(s) => s,
@@ -231,10 +227,6 @@ pub struct SegmentedLog {
 }
 
 impl SegmentedLog {
-    pub fn directory(&self) -> &Path {
-        self.directory.as_path()
-    }
-
     pub fn next_offset(&self) -> u64 {
         self.next_offset
     }
@@ -490,7 +482,7 @@ mod tests {
     use std::{
         fs::{self, OpenOptions, read},
         io::Write,
-        path::{self, Path},
+        path::Path,
         vec,
     };
 
@@ -499,9 +491,7 @@ mod tests {
         storage::{
             log::Log,
             record::{Record, RecordLimits},
-            segment::{
-                self, ActiveSegment, ClosedSegment, SegmentConfig, SegmentMetadata, SegmentedLog,
-            },
+            segment::{ActiveSegment, ClosedSegment, SegmentConfig, SegmentMetadata, SegmentedLog},
         },
     };
 
@@ -550,7 +540,7 @@ mod tests {
             "SegmentMetadata should preserve the base offset"
         );
         assert_eq!(
-            metadata.path(),
+            metadata.path.as_path(),
             path,
             "SegmentMetadata should preserve the path"
         );
@@ -593,7 +583,7 @@ mod tests {
             "ClosedSegment should expose the correct base offset"
         );
         assert_eq!(
-            closed_segment.metadata.path(),
+            closed_segment.metadata.path.as_path(),
             path,
             "ClosedSegment should expose the correct path"
         );
@@ -623,7 +613,7 @@ mod tests {
             "ActiveSegment should expose the correct base offset"
         );
         assert_eq!(
-            exposed_metadata.path(),
+            exposed_metadata.path.as_path(),
             path,
             "ActiveSegment should expose the correct path"
         );
@@ -1406,7 +1396,7 @@ mod tests {
         };
 
         assert_eq!(
-            segmented_log.directory(),
+            segmented_log.directory.as_path(),
             dir_path,
             "segmented log should preserve its partition directory"
         );
@@ -1419,13 +1409,13 @@ mod tests {
         let exposed_closed = &segmented_log.closed_segments[0];
 
         assert_eq!(exposed_closed.metadata.base_offset(), 0);
-        assert_eq!(exposed_closed.metadata.path(), closed_path);
+        assert_eq!(exposed_closed.metadata.path.as_path(), closed_path);
         assert_eq!(exposed_closed.metadata.file_len(), closed_file_len);
 
         let exposed_active = &segmented_log.active_segment;
 
         assert_eq!(exposed_active.metadata.base_offset(), 1);
-        assert_eq!(exposed_active.metadata.path(), active_path);
+        assert_eq!(exposed_active.metadata.path.as_path(), active_path);
         assert_eq!(exposed_active.metadata.file_len(), 0);
 
         assert_eq!(
@@ -1474,7 +1464,7 @@ mod tests {
 
         let active_segment = &segmented_log.active_segment;
         assert_eq!(active_segment.metadata.base_offset(), 0);
-        assert_eq!(active_segment.metadata.path(), path);
+        assert_eq!(active_segment.metadata.path.as_path(), path);
         assert_eq!(active_segment.metadata.file_len(), 0);
 
         assert_eq!(segmented_log.next_offset(), 0);

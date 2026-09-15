@@ -63,7 +63,7 @@ impl<'a> std::io::Read for Reader<'a> {
     }
 }
 
-pub struct LogScanner<'a> {
+pub(crate) struct LogScanner<'a> {
     reader: BufReader<Reader<'a>>,
     path: &'a Path,
     limits: &'a RecordLimits,
@@ -179,7 +179,7 @@ impl Iterator for LogScanner<'_> {
 }
 
 #[derive(Debug)]
-pub struct Log {
+pub(crate) struct Log {
     file: File,
     path: PathBuf,
     limits: RecordLimits,
@@ -273,7 +273,7 @@ impl Log {
         Ok(next_offset)
     }
 
-    pub fn create_active(path: &Path, limits: RecordLimits) -> Result<Self, StorageError> {
+    pub(crate) fn create_active(path: &Path, limits: RecordLimits) -> Result<Self, StorageError> {
         let file = OpenOptions::new()
             .create_new(true)
             .write(true)
@@ -290,7 +290,7 @@ impl Log {
         Ok(log)
     }
 
-    pub fn open_active(
+    pub(crate) fn open_active(
         path: &Path,
         base_offset: u64,
         limits: RecordLimits,
@@ -315,7 +315,7 @@ impl Log {
         Ok((log, next_offset))
     }
 
-    pub fn open_closed(
+    pub(crate) fn open_closed(
         path: &Path,
         base_offset: u64,
         limits: RecordLimits,
@@ -339,7 +339,7 @@ impl Log {
         Ok((log, next_offset))
     }
 
-    pub fn append(&mut self, record: &Record) -> Result<(), StorageError> {
+    pub(crate) fn append(&mut self, record: &Record) -> Result<(), StorageError> {
         if self.append_failed {
             return Err(StorageError::AppendDisabled);
         }
@@ -349,7 +349,7 @@ impl Log {
         Self::write_record(&mut self.file, &mut self.append_failed, &bytes)
     }
 
-    pub fn scan(&self) -> Result<LogScanner<'_>, StorageError> {
+    pub(crate) fn scan(&self) -> Result<LogScanner<'_>, StorageError> {
         let reader = Reader::new(&self.file);
         Ok(LogScanner {
             reader: BufReader::new(reader),
@@ -360,11 +360,11 @@ impl Log {
         })
     }
 
-    pub fn len(&self) -> Result<u64, StorageError> {
+    pub(crate) fn len(&self) -> Result<u64, StorageError> {
         Ok(self.file.metadata()?.len())
     }
 
-    pub fn is_empty(&self) -> Result<bool, StorageError> {
+    pub(crate) fn is_empty(&self) -> Result<bool, StorageError> {
         Ok(self.len()? == 0)
     }
 }
