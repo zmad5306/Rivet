@@ -162,8 +162,8 @@ impl ActiveSegment {
         &self.metadata
     }
 
-    pub fn log(&self) -> &Log {
-        &self.log
+    pub fn scan(&self) -> Result<LogScanner<'_>, StorageError> {
+        self.log.scan()
     }
 }
 
@@ -1391,8 +1391,9 @@ mod tests {
                 asserted_closed_segments += 1;
             }
             let active_segment = segmented_log.active_segment();
-            let log = active_segment.log();
-            let scanner = log.scan().expect("scanning active segment should succeed");
+            let scanner = active_segment
+                .scan()
+                .expect("scanning active segment should succeed");
             for result in scanner {
                 let record = result.expect("reading record from scanner should succeed");
                 offsets_found.push(record.offset());
