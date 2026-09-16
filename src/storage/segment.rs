@@ -501,6 +501,127 @@ mod tests {
     };
 
     #[test]
+    fn segmented_log_read_returns_records_on_both_sides_of_every_boundary() {
+        // 1. Create a temporary directory and keep its owner alive for the test.
+        // 2. Build five expected Records with offsets 0 through 4, fixed timestamps,
+        //    and distinct but equal-length payloads. Use the same key length for all.
+        // 3. Obtain one record's encoded_len and set max_segment_bytes to twice
+        //    that length (converted to u64), so each closed segment holds two records.
+        // 4. Open SegmentedLog with that config and append the expected records.
+        // 5. Verify the fixture has closed bases 0 and 2 and active base 4.
+        //    This ensures the test really exercises two segment boundaries.
+        // 6. Read each expected offset through SegmentedLog::read. Unwrap both the
+        //    Result and Option, then compare the entire Record with the original.
+        // 7. Ensure those checks include pairs 1/2 and 3/4, plus first offset 0
+        //    and last offset 4. Include the requested offset in assertion messages.
+        todo!(
+            "Append offsets 0–4 with two equal-sized records per segment; compare every read with the complete original record, including first and last offsets"
+        );
+    }
+
+    #[test]
+    fn segmented_log_read_returns_none_for_beyond_end_offsets() {
+        // 1. Create a temporary directory and five equal-sized records at offsets 0..=4.
+        // 2. Configure a threshold of two encoded records and append all five,
+        //    leaving two closed segments and a populated active segment.
+        // 3. Assert next_offset is 5 and read(4) still returns the complete last record.
+        // 4. Request offset 5 (exactly next_offset), a larger ordinary offset such
+        //    as 100, and u64::MAX. Each call must succeed with None, not an error.
+        // 5. Read offset 4 again and check next_offset remains 5, demonstrating
+        //    that unsuccessful lookups did not change observable log contents.
+        todo!(
+            "Append several records across segments; verify next_offset and u64::MAX return None"
+        );
+    }
+
+    #[test]
+    fn segmented_log_read_preserves_records_across_boundaries_after_restart() {
+        // 1. Keep a temporary directory, RecordLimits, SegmentConfig, and a vector
+        //    of five expected records alive across both openings of the log.
+        // 2. Use equal encoded sizes and a two-record threshold to produce bases
+        //    0, 2, and 4, with record 4 in a populated active segment.
+        // 3. Append every expected record and compare every read with its original
+        //    before restart, establishing the expected observable contents.
+        // 4. Drop the SegmentedLog so its file handles close, then reopen the same
+        //    directory with the same limits and config; do not append new records.
+        // 5. Assert next_offset is 5 and the reopened segment bases are 0, 2, and 4.
+        // 6. Read all five offsets using the public read API and compare complete
+        //    Records, covering first/last and both sides of both boundaries.
+        // 7. Verify read(5) and read(u64::MAX) succeed with None after reopening.
+        todo!(
+            "Create multiple segments with a populated active segment, drop and reopen the log, then compare every read with its original record and check beyond-end reads"
+        );
+    }
+
+    #[test]
+    fn segmented_log_read_returns_none_for_empty_log() {
+        // 1. Create a temporary directory and open a new SegmentedLog with default
+        //    limits and config. Do not append any records.
+        // 2. Assert next_offset is 0, there are no closed segments, and the active
+        //    segment has base 0 and byte length 0.
+        // 3. Read offsets 0 and u64::MAX; unwrap only the Result and assert None.
+        // 4. Drop and reopen the same log, then repeat the next_offset and read
+        //    assertions to cover an existing empty segment as well as a new one.
+        todo!("Open an empty log and verify reads at 0 and u64::MAX return None");
+    }
+
+    #[test]
+    fn segmented_log_read_handles_empty_active_segment_after_rotation() {
+        // 1. Build four expected equal-sized records with consecutive offsets 0..=3.
+        //    Open a temporary log with a threshold of two encoded records.
+        // 2. Append all four records. The fourth append should rotate immediately,
+        //    leaving closed segments based at 0 and 2 and an empty active at 4.
+        // 3. Assert that layout, active byte length 0, and next_offset 4 explicitly.
+        // 4. Read every stored record and compare it with its original, especially
+        //    offset 3 immediately before the empty active segment's base.
+        // 5. Verify reads at 4 and u64::MAX succeed with None: selecting an empty
+        //    active segment must not panic or manufacture a record.
+        // 6. Drop and reopen with the same configuration, then repeat the layout,
+        //    next_offset, full-record, and unavailable-offset assertions.
+        todo!(
+            "End an append exactly at the rotation threshold; verify the last closed record is readable and the empty active base returns None, before and after reopening"
+        );
+    }
+
+    #[test]
+    fn segmented_log_read_preserves_absent_and_empty_keys() {
+        // 1. Create four expected records at offsets 0..=3 with keys alternating
+        //    None, Some(empty), None, Some(empty), and equal-length payloads.
+        // 2. Confirm equal encoded lengths: absent and present-empty keys both
+        //    have zero key bytes, but their key-presence flags must differ.
+        // 3. Use a two-record threshold and append the records into a temporary log.
+        //    Verify closed bases 0 and 2, placing Some(empty) at offset 1 and
+        //    None at offset 2 on opposite sides of a segment boundary.
+        // 4. Read every record and compare the complete value with its original.
+        //    Also explicitly assert absent keys are None and present-empty keys
+        //    are Some of an empty slice; do not flatten both into an empty slice.
+        // 5. Drop and reopen the log, then repeat the full-record and key-presence
+        //    assertions to prove the distinction survives persistence and discovery.
+        todo!(
+            "Place records with None and Some(empty) keys across a segment boundary; verify the distinction before and after reopening"
+        );
+    }
+
+    #[test]
+    fn segmented_log_read_preserves_binary_keys_and_payloads() {
+        // 1. Build five expected records at offsets 0..=4 with fixed timestamps,
+        //    present binary keys, and binary payloads. Include bytes such as
+        //    0x00, 0x80, and 0xFF, and distinguish each record's contents.
+        // 2. Keep all keys the same length and all payloads the same length so
+        //    a threshold of two encoded records produces bases 0, 2, and 4.
+        // 3. Open a temporary log, append all records, and verify those bases so
+        //    the checks cover closed segments and a populated active segment.
+        // 4. Read every offset and compare the entire Record with its original;
+        //    compare key and payload bytes directly without UTF-8 conversion.
+        // 5. Pay particular attention to boundary pairs 1/2 and 3/4, ensuring
+        //    their distinct bytes cannot pass through an off-by-one lookup.
+        // 6. Drop and reopen the same log and repeat all record comparisons.
+        todo!(
+            "Read records containing zero and non-UTF-8 bytes in keys and payloads across segment boundaries, before and after reopening; compare complete records"
+        );
+    }
+
+    #[test]
     fn default_segment_config_uses_sixty_four_mibibytes() {
         let config = SegmentConfig::default();
         let expected_byte: u64 = 64 * 1024 * 1024;
