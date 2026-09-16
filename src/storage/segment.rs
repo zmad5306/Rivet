@@ -1329,6 +1329,15 @@ mod tests {
             1,
             "the directory should contain only the initial zero-based segment"
         );
+
+        let path = dir_path.join(SegmentMetadata::filename(0));
+        let file_len = fs::metadata(&path)
+            .expect("reading file metadata should succeed")
+            .len();
+        assert_eq!(
+            file_len, 0,
+            "file length should remain zero after failed append"
+        );
     }
 
     #[test]
@@ -1440,7 +1449,7 @@ mod tests {
         assert_eq!(
             segmented_log.active_segment.metadata.file_len(),
             0,
-            "active segment file length should be 68 bytes after appending record2"
+            "active segment file length should be 0 bytes after appending record2"
         );
 
         let closed_segments = &segmented_log.closed_segments;
@@ -1703,6 +1712,10 @@ mod tests {
 
         let mut segmented_log = SegmentedLog::open(dir_path, RecordLimits::default(), config)
             .expect("failed to reopen segmented log");
+
+        assert_eq!(segmented_log.next_offset, 4);
+        assert_eq!(segmented_log.active_segment.metadata.file_len(), 0);
+        assert_eq!(segmented_log.active_segment.metadata.base_offset(), 4);
 
         let segment_files = fs::read_dir(dir_path).expect("failed to read segment directory");
 
