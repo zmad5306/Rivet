@@ -216,3 +216,35 @@ impl std::error::Error for ConfigurationError {
         }
     }
 }
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum TopicNameError {
+    InvalidLength { actual: usize },
+    InvalidCharacter { character: char },
+}
+
+impl std::fmt::Display for TopicNameError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TopicNameError::InvalidLength { actual } => write!(
+                f,
+                "invalid topic name length: {}, 1 to 128 bytes allowed",
+                actual
+            ),
+            TopicNameError::InvalidCharacter { character } => write!(
+                f,
+                "invalid character '{}' in topic name, only ASCII letters, digits, - and _ allowed.",
+                character
+            ),
+        }
+    }
+}
+
+impl std::error::Error for TopicNameError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            TopicNameError::InvalidLength { .. } => None,
+            TopicNameError::InvalidCharacter { .. } => None,
+        }
+    }
+}
