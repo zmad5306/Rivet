@@ -427,7 +427,11 @@ impl SegmentedLog {
                 Ok(_) => {}
                 Err(e) => {
                     self.append_disabled = true;
-                    return Err(e);
+                    return Err(StorageError::RotationAfterCommit {
+                        committed_offset: record.offset(),
+                        next_offset: self.next_offset,
+                        source: Box::new(e),
+                    });
                 }
             }
         }
@@ -1809,6 +1813,38 @@ mod tests {
             vec![record1, record2, record3, record4, record5],
             "scanned records should match the appended records"
         );
+    }
+
+    #[test]
+    fn segmented_log_rotation_create_failure_preserves_commit_and_disables_appends_until_restart() {
+        // TODO: Open a fresh segmented log with a threshold smaller than one valid record.
+        // After opening, create the canonical file for offset 1 so rotation's create_new fails.
+        // Snapshot the colliding file, then append offset 0 and expect
+        // StorageError::RotationAfterCommit with committed_offset 0 and next_offset 1.
+        // Verify its boxed source is StorageError::Io and that the underlying std::io::Error
+        // has ErrorKind::AlreadyExists.
+        // TODO: Verify offset 0 was durably written to segment 0, next_offset advanced to 1,
+        // segment 0 remains the in-memory active segment, no closed segment was installed,
+        // and the colliding offset-1 file was not modified.
+        // TODO: Attempt offset 1 again and expect AppendDisabled without changing either file.
+        // Drop and reopen the owner; verify segment 0 becomes closed, the empty offset-1 file
+        // becomes active, next_offset is 1, and appending offset 1 succeeds after restart.
+        todo!("implement rotation create-failure state and restart test");
+    }
+
+    #[test]
+    fn segmented_log_failed_codec_append_does_not_rotate_and_valid_retry_can_rotate() {
+        // TODO: Choose limits that reject an oversized payload and a threshold equal to the
+        // combined encoded length of two valid records. Open a fresh segmented log.
+        // TODO: Append valid offset 0 and snapshot the active file bytes, metadata length,
+        // next_offset, segment count, and canonical filenames.
+        // TODO: Attempt an oversized record at offset 1 and expect PayloadTooLarge. Verify the
+        // snapshots are unchanged and no new segment was created: a pre-write failure must not
+        // consume an offset or trigger rotation.
+        // TODO: Retry with a valid record at offset 1. Verify it succeeds, reaches the threshold,
+        // rotates exactly once, leaves both records in the closed zero-based segment, and creates
+        // one empty canonical active segment based at offset 2.
+        todo!("implement failed codec append no-rotation and valid-retry rotation test");
     }
 
     #[test]

@@ -74,6 +74,11 @@ pub enum StorageError {
         path: PathBuf,
         base_offset: u64,
     },
+    RotationAfterCommit {
+        committed_offset: u64,
+        next_offset: u64,
+        source: Box<StorageError>,
+    },
 }
 
 impl From<CodecError> for StorageError {
@@ -155,6 +160,17 @@ impl std::fmt::Display for StorageError {
                     base_offset
                 )
             }
+            StorageError::RotationAfterCommit {
+                committed_offset,
+                next_offset,
+                source,
+            } => {
+                write!(
+                    f,
+                    "rotation after commit: committed offset {}, next offset {}: {}",
+                    committed_offset, next_offset, source
+                )
+            }
         }
     }
 }
@@ -173,6 +189,7 @@ impl std::error::Error for StorageError {
             StorageError::DuplicateSegmentBaseOffset { .. } => None,
             StorageError::UnexpectedSegmentBaseOffset { .. } => None,
             StorageError::EmptyClosedSegment { .. } => None,
+            StorageError::RotationAfterCommit { source, .. } => Some(source),
         }
     }
 }
