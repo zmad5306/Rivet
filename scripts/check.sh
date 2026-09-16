@@ -35,3 +35,5 @@ run_check() {
 run_check cargo fmt --check
 run_check cargo clippy --all-targets -- -D warnings
 run_check cargo test
+
+printf '\033[32m✓ All checks passed.\033[0m\n'

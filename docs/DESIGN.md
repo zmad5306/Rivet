@@ -108,6 +108,23 @@ data/
 
 A segment filename is the first offset it contains. Closed segments are immutable; only the active segment may be appended to.
 
+### Segmented-log implementation ownership
+
+The storage implementation maps a partition to its files through these layers:
+
+```text
+Partition
+ └── SegmentedLog
+      ├── ClosedSegment
+      │    └── Log (one physical `.log` file)
+      ├── ClosedSegment
+      │    └── Log (one physical `.log` file)
+      └── ActiveSegment
+           └── Log (one physical `.log` file)
+```
+
+`SegmentedLog` presents all of a partition's segment files as one ordered logical log. A segment adds base-offset, byte-range, and lifecycle meaning around a single-file `Log`. Both closed and active segments may own a `Log` so reads can reuse an open file handle, but their wrapper APIs enforce mutability: `ClosedSegment` exposes only read/scan operations, while `ActiveSegment` alone exposes append operations. The final segment is the single active segment; every preceding segment is closed and immutable.
+
 ### Binary record format, version 1
 
 All integer fields use big-endian encoding.

@@ -54,6 +54,31 @@ pub enum StorageError {
         byte_position: u64,
         source: CodecError,
     },
+    InvalidSegmentFilename {
+        path: PathBuf,
+    },
+    UnexpectedSegmentEntry {
+        path: PathBuf,
+    },
+    DuplicateSegmentBaseOffset {
+        base_offset: u64,
+        first_path: PathBuf,
+        second_path: PathBuf,
+    },
+    UnexpectedSegmentBaseOffset {
+        path: PathBuf,
+        expected: u64,
+        actual: u64,
+    },
+    EmptyClosedSegment {
+        path: PathBuf,
+        base_offset: u64,
+    },
+    RotationAfterCommit {
+        committed_offset: u64,
+        next_offset: u64,
+        source: Box<StorageError>,
+    },
 }
 
 impl From<CodecError> for StorageError {
@@ -91,6 +116,61 @@ impl std::fmt::Display for StorageError {
                 byte_position,
                 source
             ),
+            StorageError::InvalidSegmentFilename { path } => {
+                write!(f, "invalid segment filename: {}", path.display())
+            }
+            StorageError::UnexpectedSegmentEntry { path } => {
+                write!(
+                    f,
+                    "unexpected entry in segment directory: {}",
+                    path.display()
+                )
+            }
+            StorageError::DuplicateSegmentBaseOffset {
+                base_offset,
+                first_path,
+                second_path,
+            } => {
+                write!(
+                    f,
+                    "duplicate segment base offset {}: {} and {}",
+                    base_offset,
+                    first_path.display(),
+                    second_path.display()
+                )
+            }
+            StorageError::UnexpectedSegmentBaseOffset {
+                path,
+                expected,
+                actual,
+            } => {
+                write!(
+                    f,
+                    "unexpected segment base offset in {}: expected {}, actual {}",
+                    path.display(),
+                    expected,
+                    actual
+                )
+            }
+            StorageError::EmptyClosedSegment { path, base_offset } => {
+                write!(
+                    f,
+                    "closed segment is empty: {} (base offset {})",
+                    path.display(),
+                    base_offset
+                )
+            }
+            StorageError::RotationAfterCommit {
+                committed_offset,
+                next_offset,
+                source,
+            } => {
+                write!(
+                    f,
+                    "rotation after commit: committed offset {}, next offset {}: {}",
+                    committed_offset, next_offset, source
+                )
+            }
         }
     }
 }
@@ -104,6 +184,35 @@ impl std::error::Error for StorageError {
             StorageError::OffsetOverflow => None,
             StorageError::UnexpectedOffset { .. } => None,
             StorageError::CorruptRecord { source, .. } => Some(source),
+            StorageError::InvalidSegmentFilename { .. } => None,
+            StorageError::UnexpectedSegmentEntry { .. } => None,
+            StorageError::DuplicateSegmentBaseOffset { .. } => None,
+            StorageError::UnexpectedSegmentBaseOffset { .. } => None,
+            StorageError::EmptyClosedSegment { .. } => None,
+            StorageError::RotationAfterCommit { source, .. } => Some(source),
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum ConfigurationError {
+    InvalidSegmentBytes { value: u64 },
+}
+
+impl std::fmt::Display for ConfigurationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ConfigurationError::InvalidSegmentBytes { value } => {
+                write!(f, "invalid segment bytes: {}", value)
+            }
+        }
+    }
+}
+
+impl std::error::Error for ConfigurationError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            ConfigurationError::InvalidSegmentBytes { .. } => None,
         }
     }
 }

@@ -4,9 +4,15 @@ use crate::storage::record::Record;
 use crate::{error::StorageError, storage::record::RecordLimits};
 use std::fs::File;
 use std::fs::OpenOptions;
-use std::io::{BufReader, Read, Write};
+use std::io::{BufReader, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 use std::path::PathBuf;
+
+#[derive(Debug, PartialEq, Eq)]
+enum RecoveryMode {
+    Active,
+    Closed,
+}
 
 trait AppendIo: Write {
     fn sync_data(&self) -> std::io::Result<()>;
@@ -57,7 +63,7 @@ impl<'a> std::io::Read for Reader<'a> {
     }
 }
 
-pub struct LogScanner<'a> {
+pub(crate) struct LogScanner<'a> {
     reader: BufReader<Reader<'a>>,
     path: &'a Path,
     limits: &'a RecordLimits,
@@ -173,7 +179,7 @@ impl Iterator for LogScanner<'_> {
 }
 
 #[derive(Debug)]
-pub struct Log {
+pub(crate) struct Log {
     file: File,
     path: PathBuf,
     limits: RecordLimits,
@@ -215,8 +221,12 @@ impl Log {
         Ok(())
     }
 
-    fn recover(&mut self) -> Result<u64, StorageError> {
-        let mut next_offset = 0;
+    fn recover(
+        &mut self,
+        base_offset: u64,
+        recovery_mode: RecoveryMode,
+    ) -> Result<u64, StorageError> {
+        let mut next_offset = base_offset;
         let mut bytes_read: usize = 0;
         let scanner = self.scan()?;
 
@@ -242,15 +252,20 @@ impl Log {
                         .ok_or(StorageError::Codec(CodecError::LengthOverflow))?;
                 }
                 Err(StorageError::Codec(
-                    CodecError::IncompleteHeader | CodecError::IncompleteBody,
-                )) => {
-                    let bytes_read_converted = match u64::try_from(bytes_read) {
-                        Ok(val) => val,
-                        Err(_) => return Err(StorageError::Codec(CodecError::LengthOverflow)),
-                    };
-                    self.file.set_len(bytes_read_converted)?;
-                    self.file.sync_data()?;
-                }
+                    error @ (CodecError::IncompleteHeader | CodecError::IncompleteBody),
+                )) => match recovery_mode {
+                    RecoveryMode::Active => {
+                        let bytes_read_converted = match u64::try_from(bytes_read) {
+                            Ok(val) => val,
+                            Err(_) => return Err(StorageError::Codec(CodecError::LengthOverflow)),
+                        };
+                        self.file.set_len(bytes_read_converted)?;
+                        self.file.sync_data()?;
+                    }
+                    RecoveryMode::Closed => {
+                        return Err(StorageError::Codec(error));
+                    }
+                },
                 Err(err) => return Err(err),
             }
         }
@@ -258,10 +273,57 @@ impl Log {
         Ok(next_offset)
     }
 
-    pub fn open(path: &Path, limits: RecordLimits) -> Result<(Self, u64), StorageError> {
+    pub(crate) fn create_active(path: &Path, limits: RecordLimits) -> Result<Self, StorageError> {
+        let file = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .read(true)
+            .open(path)?;
+
+        let log = Log {
+            file,
+            path: path.to_path_buf(),
+            limits,
+            append_failed: false,
+        };
+
+        Ok(log)
+    }
+
+    pub(crate) fn open_active(
+        path: &Path,
+        base_offset: u64,
+        limits: RecordLimits,
+    ) -> Result<(Self, u64), StorageError> {
         let file = OpenOptions::new()
             .create(true)
-            .append(true)
+            .write(true)
+            .read(true)
+            .truncate(false)
+            .open(path)?;
+
+        let mut log = Log {
+            file,
+            path: path.to_path_buf(),
+            limits,
+            append_failed: false,
+        };
+
+        let next_offset = log.recover(base_offset, RecoveryMode::Active)?;
+        log.file.seek(SeekFrom::End(0))?;
+
+        Ok((log, next_offset))
+    }
+
+    pub(crate) fn open_closed(
+        path: &Path,
+        base_offset: u64,
+        limits: RecordLimits,
+    ) -> Result<(Self, u64), StorageError> {
+        let file = OpenOptions::new()
+            .create(false)
+            .append(false)
+            .write(false)
             .read(true)
             .open(path)?;
 
@@ -272,21 +334,22 @@ impl Log {
             append_failed: false,
         };
 
-        let next_offset = log.recover()?;
+        let next_offset = log.recover(base_offset, RecoveryMode::Closed)?;
 
         Ok((log, next_offset))
     }
 
-    pub fn append(&mut self, record: &Record) -> Result<(), StorageError> {
+    pub(crate) fn append(&mut self, record: &Record) -> Result<(), StorageError> {
         if self.append_failed {
             return Err(StorageError::AppendDisabled);
         }
 
         let bytes = record.encode(&self.limits)?;
+        self.file.seek(SeekFrom::End(0))?;
         Self::write_record(&mut self.file, &mut self.append_failed, &bytes)
     }
 
-    pub fn scan(&self) -> Result<LogScanner<'_>, StorageError> {
+    pub(crate) fn scan(&self) -> Result<LogScanner<'_>, StorageError> {
         let reader = Reader::new(&self.file);
         Ok(LogScanner {
             reader: BufReader::new(reader),
@@ -295,6 +358,14 @@ impl Log {
             byte_position: 0,
             finished: false,
         })
+    }
+
+    pub(crate) fn len(&self) -> Result<u64, StorageError> {
+        Ok(self.file.metadata()?.len())
+    }
+
+    pub(crate) fn is_empty(&self) -> Result<bool, StorageError> {
+        Ok(self.len()? == 0)
     }
 }
 
@@ -506,8 +577,8 @@ mod tests {
         let dir = tempfile::tempdir().expect("temporary directory should be created");
         let path = dir.path().join("failed-append.log");
 
-        let (mut log, _) =
-            Log::open(&path, RecordLimits::default()).expect("opening the log should succeed");
+        let (mut log, _) = Log::open_active(&path, 0, RecordLimits::default())
+            .expect("opening the log should succeed");
 
         std::fs::write(&path, &writer.written)
             .expect("writing the simulated failed-append contents should succeed");
