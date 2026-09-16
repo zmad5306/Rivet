@@ -1817,34 +1817,292 @@ mod tests {
 
     #[test]
     fn segmented_log_rotation_create_failure_preserves_commit_and_disables_appends_until_restart() {
-        // TODO: Open a fresh segmented log with a threshold smaller than one valid record.
-        // After opening, create the canonical file for offset 1 so rotation's create_new fails.
-        // Snapshot the colliding file, then append offset 0 and expect
-        // StorageError::RotationAfterCommit with committed_offset 0 and next_offset 1.
-        // Verify its boxed source is StorageError::Io and that the underlying std::io::Error
-        // has ErrorKind::AlreadyExists.
-        // TODO: Verify offset 0 was durably written to segment 0, next_offset advanced to 1,
-        // segment 0 remains the in-memory active segment, no closed segment was installed,
-        // and the colliding offset-1 file was not modified.
-        // TODO: Attempt offset 1 again and expect AppendDisabled without changing either file.
-        // Drop and reopen the owner; verify segment 0 becomes closed, the empty offset-1 file
-        // becomes active, next_offset is 1, and appending offset 1 succeeds after restart.
-        todo!("implement rotation create-failure state and restart test");
+        let dir = tempfile::tempdir().expect("failed to create temporary directory");
+        let dir_path = dir.path();
+        let config = SegmentConfig::new(30).expect("failed to create segment config");
+        let mut segmented_log = SegmentedLog::open(dir_path, RecordLimits::default(), config)
+            .expect("failed to open segmented log");
+        let first_segment_path = dir_path.join(SegmentMetadata::filename(0));
+        let second_segment_path = dir_path.join(SegmentMetadata::filename(1));
+        let record1 = Record::new(0, 1_700_000_000, None, vec![]);
+        let record2 = Record::new(1, 1_700_000_001, None, vec![]);
+
+        assert!(
+            first_segment_path.exists(),
+            "first segment file should exist"
+        );
+
+        fs::File::create(&second_segment_path).expect("failed to create second segment file");
+        let segment2_snapshot =
+            fs::read(&second_segment_path).expect("should read second segment file");
+
+        assert!(
+            second_segment_path.exists(),
+            "second segment file should exist"
+        );
+
+        let error = segmented_log
+            .append(&record1)
+            .expect_err("appending should fail due to rotation create failure");
+
+        let segment1_snapshot =
+            fs::read(&first_segment_path).expect("should read first segment file");
+
+        assert!(
+            matches!(error, StorageError::RotationAfterCommit { committed_offset: 0, next_offset: 1, source } if matches!(source.as_ref(), StorageError::Io(io_error) if io_error.kind() == std::io::ErrorKind::AlreadyExists)),
+            "error should be RotationAfterCommit"
+        );
+        assert_eq!(
+            segmented_log.next_offset(),
+            1,
+            "next_offset should be 1 after failed rotation"
+        );
+        assert_eq!(
+            segmented_log.closed_segments.len(),
+            0,
+            "no segments should be closed after failed rotation"
+        );
+
+        let error = segmented_log
+            .append(&record2)
+            .expect_err("appending should fail due to rotation create failure");
+
+        assert!(
+            matches!(error, StorageError::AppendDisabled),
+            "error should be AppendDisabled"
+        );
+        assert_eq!(
+            segmented_log.next_offset(),
+            1,
+            "next_offset should remain 1 after failed append"
+        );
+        assert_eq!(
+            fs::read(&first_segment_path).expect("should read first segment file"),
+            segment1_snapshot,
+            "first segment file should be unchanged"
+        );
+        assert_eq!(
+            fs::read(&second_segment_path).expect("should read second segment file"),
+            segment2_snapshot,
+            "second segment file should be unchanged"
+        );
+
+        drop(segmented_log);
+
+        let mut segmented_log = SegmentedLog::open(dir_path, RecordLimits::default(), config)
+            .expect("failed to reopen segmented log");
+
+        assert_eq!(
+            segmented_log.closed_segments.len(),
+            1,
+            "one segment should be closed after reopening"
+        );
+        assert_eq!(
+            segmented_log.closed_segments[0].metadata.base_offset(),
+            0,
+            "base offset of the first closed segment should be 0"
+        );
+        assert_eq!(
+            segmented_log.active_segment.metadata.base_offset(),
+            1,
+            "base offset of the active segment should be 1"
+        );
+        assert_eq!(
+            segmented_log.active_segment.metadata.file_len(),
+            0,
+            "file length of the active segment should be 0"
+        );
+        assert_eq!(
+            segmented_log.next_offset(),
+            1,
+            "next_offset should be 1 after reopening"
+        );
+
+        segmented_log
+            .append(&record2)
+            .expect("appending should succeed after reopening");
+
+        assert_eq!(
+            segmented_log.next_offset(),
+            2,
+            "next_offset should be 2 after appending offset 1"
+        );
+
+        let mut scanner = segmented_log.scan().expect("failed to create scanner");
+
+        let scanned_record1 = scanner
+            .next()
+            .expect("should have a first scanned record")
+            .expect("failed to read first scanned record");
+        let scanned_record2 = scanner
+            .next()
+            .expect("should have a second scanned record")
+            .expect("failed to read second scanned record");
+        let scanned_record_none = scanner.next();
+
+        assert_eq!(
+            scanned_record1, record1,
+            "first scanned record should match the appended record"
+        );
+        assert_eq!(
+            scanned_record2, record2,
+            "second scanned record should match the appended record"
+        );
+        assert!(
+            scanned_record_none.is_none(),
+            "there should be no more scanned records"
+        );
+
+        let read_record1 = segmented_log
+            .read(0)
+            .expect("failed to read record at offset 0")
+            .expect("record at offset 0 should exist");
+        let read_record2 = segmented_log
+            .read(1)
+            .expect("failed to read record at offset 1")
+            .expect("record at offset 1 should exist");
+        let read_record_none = segmented_log
+            .read(2)
+            .expect("failed to read record at offset 2");
+
+        assert_eq!(
+            read_record1, record1,
+            "read record at offset 0 should match the appended record"
+        );
+        assert_eq!(
+            read_record2, record2,
+            "read record at offset 1 should match the appended record"
+        );
+        assert!(
+            read_record_none.is_none(),
+            "there should be no record at offset 2"
+        );
     }
 
     #[test]
     fn segmented_log_failed_codec_append_does_not_rotate_and_valid_retry_can_rotate() {
-        // TODO: Choose limits that reject an oversized payload and a threshold equal to the
-        // combined encoded length of two valid records. Open a fresh segmented log.
-        // TODO: Append valid offset 0 and snapshot the active file bytes, metadata length,
-        // next_offset, segment count, and canonical filenames.
-        // TODO: Attempt an oversized record at offset 1 and expect PayloadTooLarge. Verify the
-        // snapshots are unchanged and no new segment was created: a pre-write failure must not
-        // consume an offset or trigger rotation.
-        // TODO: Retry with a valid record at offset 1. Verify it succeeds, reaches the threshold,
-        // rotates exactly once, leaves both records in the closed zero-based segment, and creates
-        // one empty canonical active segment based at offset 2.
-        todo!("implement failed codec append no-rotation and valid-retry rotation test");
+        let limits = RecordLimits::new(2, 3);
+        let record1 = Record::new(0, 1_700_000_000, None, vec![]);
+        let record2 = Record::new(1, 1_700_000_000, None, vec![1, 2, 3, 4]);
+        let record3 = Record::new(1, 1_700_000_000, None, vec![]);
+        let record1_len = u64::try_from(
+            record1
+                .encoded_len()
+                .expect("failed to get encoded length of record1"),
+        )
+        .expect("failed to convert record1 length to u64");
+        let record3_len = u64::try_from(
+            record3
+                .encoded_len()
+                .expect("failed to get encoded length of record3"),
+        )
+        .expect("failed to convert record3 length to u64");
+        let max_segment_bytes = record1_len + record3_len;
+        let config =
+            SegmentConfig::new(max_segment_bytes).expect("failed to create segment config");
+        let dir = tempfile::tempdir().expect("temporary directory should be created");
+        let dir_path = dir.path();
+        let mut segmented_log =
+            SegmentedLog::open(dir_path, limits, config).expect("segmented log should be created");
+        let segment1_path = dir_path.join(SegmentMetadata::filename(0));
+        let segment2_path = dir_path.join(SegmentMetadata::filename(2));
+
+        segmented_log
+            .append(&record1)
+            .expect("record1 should be appended successfully");
+
+        let segment1_file_snapshot =
+            fs::read(&segment1_path).expect("failed to read segment1 file snapshot");
+        let metadata_len_snapshot = segmented_log.active_segment.metadata.file_len();
+        let next_offset_snapshot = segmented_log.next_offset();
+        let segment_count_snapshot = segmented_log.closed_segments.len() + 1;
+
+        let error = segmented_log
+            .append(&record2)
+            .expect_err("appending oversized record2 should fail");
+
+        assert!(
+            matches!(error, StorageError::Codec(CodecError::PayloadTooLarge)),
+            "error should be PayloadTooLarge"
+        );
+
+        assert_eq!(
+            fs::read(&segment1_path).expect("failed to read segment1 file snapshot"),
+            segment1_file_snapshot,
+            "segment1 file should remain unchanged after failed append"
+        );
+        assert_eq!(
+            segmented_log.active_segment.metadata.file_len(),
+            metadata_len_snapshot,
+            "active segment file length should remain unchanged after failed append"
+        );
+        assert_eq!(
+            segmented_log.next_offset(),
+            next_offset_snapshot,
+            "next offset should remain unchanged after failed append"
+        );
+        assert_eq!(
+            segmented_log.closed_segments.len() + 1,
+            segment_count_snapshot,
+            "segment count should remain unchanged after failed append"
+        );
+
+        segmented_log
+            .append(&record3)
+            .expect("record3 should be appended successfully");
+
+        let mut scanner = segmented_log.scan().expect("scanning should succeed");
+        let scanned_record1 = scanner
+            .next()
+            .expect("scanned record1 should be available")
+            .expect("scanned record1 should be valid");
+        assert_eq!(
+            scanned_record1, record1,
+            "scanned record1 should match the original record1"
+        );
+
+        let scanned_record2 = scanner
+            .next()
+            .expect("scanned record2 should be available")
+            .expect("scanned record2 should be valid");
+        assert_eq!(
+            scanned_record2, record3,
+            "scanned record2 should match the original record3"
+        );
+
+        let scanned_record_none = scanner.next();
+        assert!(
+            scanned_record_none.is_none(),
+            "no more records should be available after scanning all records"
+        );
+
+        assert!(
+            fs::read(&segment1_path)
+                .expect("failed to read segment1 file snapshot")
+                .starts_with(&segment1_file_snapshot)
+        );
+        assert_eq!(
+            fs::metadata(&segment1_path)
+                .expect("failed to read segment1 metadata")
+                .len(),
+            68,
+            "segment1 file length should be 68 after appending record3"
+        );
+        assert_eq!(
+            segmented_log.next_offset(),
+            2,
+            "next offset should be 2 after appending record3"
+        );
+        assert_eq!(
+            segmented_log.closed_segments.len(),
+            1,
+            "one segment should be closed after the valid retry triggers rotation"
+        );
+        assert_eq!(
+            fs::read(&segment2_path).expect("failed to read segment2 file snapshot"),
+            vec![],
+            "segment2 file should be empty after appending record3"
+        );
     }
 
     #[test]
