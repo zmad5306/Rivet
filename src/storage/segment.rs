@@ -493,7 +493,7 @@ mod tests {
 
     use crate::{
         error::{CodecError, ConfigurationError, StorageError}, storage::{
-            log::Log, record::{self, Record, RecordLimits}, segment::{self, ActiveSegment, ClosedSegment, SegmentConfig, SegmentMetadata, SegmentedLog},
+            log::Log, record::{Record, RecordLimits}, segment::{ActiveSegment, ClosedSegment, SegmentConfig, SegmentMetadata, SegmentedLog},
         },
     };
 
@@ -742,21 +742,74 @@ mod tests {
 
     #[test]
     fn segmented_log_read_preserves_absent_and_empty_keys() {
-        // 1. Create four expected records at offsets 0..=3 with keys alternating
-        //    None, Some(empty), None, Some(empty), and equal-length payloads.
-        // 2. Confirm equal encoded lengths: absent and present-empty keys both
-        //    have zero key bytes, but their key-presence flags must differ.
-        // 3. Use a two-record threshold and append the records into a temporary log.
-        //    Verify closed bases 0 and 2, placing Some(empty) at offset 1 and
-        //    None at offset 2 on opposite sides of a segment boundary.
-        // 4. Read every record and compare the complete value with its original.
-        //    Also explicitly assert absent keys are None and present-empty keys
-        //    are Some of an empty slice; do not flatten both into an empty slice.
-        // 5. Drop and reopen the log, then repeat the full-record and key-presence
-        //    assertions to prove the distinction survives persistence and discovery.
-        todo!(
-            "Place records with None and Some(empty) keys across a segment boundary; verify the distinction before and after reopening"
-        );
+        let record_0 = Record::new(0, 1_700_000_000, None, vec![1, 2, 3]);
+        let record_1 = Record::new(1, 1_700_000_001, Some(vec![]), vec![4, 5, 6]);
+        let record_2 = Record::new(2, 1_700_000_002, None, vec![7, 8, 9]);
+        let record_3 = Record::new(3, 1_700_000_003, Some(vec![]), vec![10, 11, 12]);
+        
+        let record_lens = vec![
+            u64::try_from(record_0.encoded_len().expect("failed to get encoded length of record 0")).expect("failed to convert record 0 length to u64"),
+            u64::try_from(record_1.encoded_len().expect("failed to get encoded length of record 1")).expect("failed to convert record 1 length to u64"),
+            u64::try_from(record_2.encoded_len().expect("failed to get encoded length of record 2")).expect("failed to convert record 2 length to u64"),
+            u64::try_from(record_3.encoded_len().expect("failed to get encoded length of record 3")).expect("failed to convert record 3 length to u64"),
+        ];
+
+        let all_equal = record_lens.windows(2).all(|w| w[0] == w[1]);
+        assert!(all_equal, "Encoded lengths of all records should be equal");
+        let record_len = record_lens[0].clone();
+        let config = SegmentConfig::new(record_len * 2).expect("failed to create segment config");
+
+        let dir = tempfile::tempdir().expect("failed to create temporary directory");
+        let dir_path = dir.path();
+
+        let mut segmented_log = SegmentedLog::open(dir_path, RecordLimits::default(), config).expect("failed to create segmented log");
+
+        segmented_log.append(&record_0).expect("failed to append record 0");
+        segmented_log.append(&record_1).expect("failed to append record 1");
+        segmented_log.append(&record_2).expect("failed to append record 2");
+        segmented_log.append(&record_3).expect("failed to append record 3");
+
+        assert_eq!(segmented_log.closed_segments.len(), 2, "There should be exactly two closed segments after appending four records with a two-record threshold");
+        assert_eq!(segmented_log.closed_segments[0].metadata.base_offset(), 0, "The first closed segment should have base offset 0");
+        assert_eq!(segmented_log.closed_segments[1].metadata.base_offset(), 2, "The second closed segment should have base offset 2");
+        assert_eq!(segmented_log.active_segment.metadata.base_offset(), 4, "The active segment should have base offset 4");
+
+        let read_record_0 = segmented_log.read(0).expect("failed to read record 0").expect("record 0 should exist");
+        let read_record_1 = segmented_log.read(1).expect("failed to read record 1").expect("record 1 should exist");
+        let read_record_2 = segmented_log.read(2).expect("failed to read record 2").expect("record 2 should exist");
+        let read_record_3 = segmented_log.read(3).expect("failed to read record 3").expect("record 3 should exist");
+        let read_record_4_none = segmented_log.read(4).expect("failed to read record 4");
+        let read_record_max_none = segmented_log.read(u64::MAX).expect("failed to read record u64::MAX");
+
+        assert_eq!(read_record_0, record_0, "Read record 0 does not match the original");
+        assert_eq!(read_record_1, record_1, "Read record 1 does not match the original");
+        assert_eq!(read_record_2, record_2, "Read record 2 does not match the original");
+        assert_eq!(read_record_3, record_3, "Read record 3 does not match the original");
+        assert!(read_record_4_none.is_none(), "Read record 4 should not exist");
+        assert!(read_record_max_none.is_none(), "Read record u64::MAX should not exist");
+
+        drop(segmented_log);
+
+        let segmented_log = SegmentedLog::open(dir_path, RecordLimits::default(), config).expect("failed to create segmented log");
+
+        assert_eq!(segmented_log.closed_segments.len(), 2, "There should be exactly two closed segments after appending four records with a two-record threshold");
+        assert_eq!(segmented_log.closed_segments[0].metadata.base_offset(), 0, "The first closed segment should have base offset 0");
+        assert_eq!(segmented_log.closed_segments[1].metadata.base_offset(), 2, "The second closed segment should have base offset 2");
+        assert_eq!(segmented_log.active_segment.metadata.base_offset(), 4, "The active segment should have base offset 4");
+
+        let read_record_0 = segmented_log.read(0).expect("failed to read record 0").expect("record 0 should exist");
+        let read_record_1 = segmented_log.read(1).expect("failed to read record 1").expect("record 1 should exist");
+        let read_record_2 = segmented_log.read(2).expect("failed to read record 2").expect("record 2 should exist");
+        let read_record_3 = segmented_log.read(3).expect("failed to read record 3").expect("record 3 should exist");
+        let read_record_4_none = segmented_log.read(4).expect("failed to read record 4");
+        let read_record_max_none = segmented_log.read(u64::MAX).expect("failed to read record u64::MAX");
+
+        assert_eq!(read_record_0, record_0, "Read record 0 does not match the original");
+        assert_eq!(read_record_1, record_1, "Read record 1 does not match the original");
+        assert_eq!(read_record_2, record_2, "Read record 2 does not match the original");
+        assert_eq!(read_record_3, record_3, "Read record 3 does not match the original");
+        assert!(read_record_4_none.is_none(), "Read record 4 should not exist");
+        assert!(read_record_max_none.is_none(), "Read record u64::MAX should not exist");
     }
 
     #[test]
