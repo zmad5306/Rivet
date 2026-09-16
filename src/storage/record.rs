@@ -5,7 +5,7 @@ const MAGIC: &[u8; 4] = b"RIVT";
 const VERSION: u8 = 1;
 pub(super) const HEADER_LENGTH: usize = 30;
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub struct RecordLimits {
     max_key_bytes: u32,
     max_payload_bytes: u32,
