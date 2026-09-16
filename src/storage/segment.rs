@@ -1297,31 +1297,31 @@ mod tests {
         let record_0 = Record::new(
             0,
             1_700_000_000,
-            Some(vec![0x00, 0x80, 0xFF, 0x01]),
+            Some(vec![0xFF, 0x00, 0x80, 0x01]),
             vec![0x00, 0x80, 0xFF, 0x01],
         );
         let record_1 = Record::new(
             1,
             1_700_000_000,
-            Some(vec![0x00, 0x80, 0xFF, 0x02]),
+            Some(vec![0xFF, 0x00, 0x80, 0x02]),
             vec![0x00, 0x80, 0xFF, 0x02],
         );
         let record_2 = Record::new(
             2,
             1_700_000_000,
-            Some(vec![0x00, 0x80, 0xFF, 0x03]),
+            Some(vec![0xFF, 0x00, 0x80, 0x03]),
             vec![0x00, 0x80, 0xFF, 0x03],
         );
         let record_3 = Record::new(
             3,
             1_700_000_000,
-            Some(vec![0x00, 0x80, 0xFF, 0x04]),
+            Some(vec![0xFF, 0x00, 0x80, 0x04]),
             vec![0x00, 0x80, 0xFF, 0x04],
         );
         let record_4 = Record::new(
             4,
             1_700_000_000,
-            Some(vec![0x00, 0x80, 0xFF, 0x05]),
+            Some(vec![0xFF, 0x00, 0x80, 0x05]),
             vec![0x00, 0x80, 0xFF, 0x05],
         );
         let record_len = u64::try_from(
