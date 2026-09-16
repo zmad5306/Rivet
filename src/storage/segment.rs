@@ -482,6 +482,7 @@ mod tests {
     use std::{
         fs::{self, OpenOptions, read},
         io::Write,
+        num::{NonZeroU32, NonZeroU64},
         path::Path,
         vec,
     };
@@ -490,8 +491,10 @@ mod tests {
         error::{CodecError, ConfigurationError, StorageError},
         storage::{
             log::Log,
-            record::{Record, RecordLimits},
-            segment::{ActiveSegment, ClosedSegment, SegmentConfig, SegmentMetadata, SegmentedLog},
+            record::{self, Record, RecordLimits},
+            segment::{
+                self, ActiveSegment, ClosedSegment, SegmentConfig, SegmentMetadata, SegmentedLog,
+            },
         },
     };
 
@@ -1285,41 +1288,292 @@ mod tests {
 
     #[test]
     fn segmented_log_append_offset_overflow_does_not_write() {
-        // TODO: Open a fresh SegmentedLog and set its private next_offset to u64::MAX.
-        // This synthetic state exercises checked arithmetic without writing a huge log.
-        // TODO: Attempt to append a valid record whose offset is u64::MAX.
-        // TODO: Expect StorageError::OffsetOverflow; assert next_offset remains u64::MAX,
-        // active metadata length stays zero, and the physical file stays empty.
-        // TODO: Verify the directory still contains only the initial zero-based segment:
-        // rejecting offset overflow must not create a new segment.
-        todo!("implement segmented append offset overflow test");
+        let dir = tempfile::tempdir().expect("temporary directory should be created");
+        let dir_path = dir.path();
+        let record = Record::new(
+            u64::MAX,
+            1_600_000_000,
+            Some(vec![10, 20, 30, 40, 50]),
+            vec![1, 2, 3, 5, 6, 7],
+        );
+        let mut segmented_log =
+            SegmentedLog::open(dir_path, RecordLimits::default(), SegmentConfig::default())
+                .expect("opening a fresh segmented log should succeed");
+        segmented_log.next_offset = u64::MAX;
+
+        let error = segmented_log
+            .append(&record)
+            .expect_err("appending a record with offset u64::MAX should fail");
+
+        assert!(
+            matches!(error, StorageError::OffsetOverflow),
+            "appending a record with offset u64::MAX should return an offset overflow error"
+        );
+
+        assert_eq!(
+            segmented_log.next_offset,
+            u64::MAX,
+            "next_offset should remain u64::MAX after failed append"
+        );
+
+        let active_metadata_length = segmented_log.active_segment.metadata.file_len();
+        assert_eq!(
+            active_metadata_length, 0,
+            "active metadata length should remain zero after failed append"
+        );
+
+        let segment_files = std::fs::read_dir(dir_path)
+            .expect("reading the directory should succeed")
+            .filter_map(Result::ok)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            segment_files.len(),
+            1,
+            "the directory should contain only the initial zero-based segment"
+        );
     }
 
     #[test]
     fn segmented_log_append_restart_restores_records_and_continues_offsets() {
-        // TODO: Open a fresh SegmentedLog using the directory path (not a .log file path),
-        // with a threshold above all three records' total size to isolate restart without rotation.
-        // TODO: Append records at offsets 0 and 1, then drop the owner to close its files.
-        // TODO: Reopen the same directory with the same limits and configuration.
-        // TODO: Verify next_offset is 2 and scan through SegmentedLog::scan(), checking
-        // the original records are unchanged. Compare active metadata with physical length.
-        // TODO: Append offset 2, verify next_offset is 3, and use the public scan again.
-        todo!("implement segmented append restart test");
+        let record1 = Record::new(
+            0,
+            1_600_000_000,
+            Some(vec![10, 20, 30, 40, 50]),
+            vec![1, 2, 3, 5, 6, 7],
+        );
+        let record2 = Record::new(
+            1,
+            1_600_000_001,
+            Some(vec![11, 21, 31, 41, 51]),
+            vec![2, 3, 4, 6, 7, 8],
+        );
+        let record3 = Record::new(
+            2,
+            1_600_000_002,
+            Some(vec![12, 22, 32, 42, 52]),
+            vec![3, 4, 5, 7, 8, 9],
+        );
+        let dir = tempfile::tempdir().expect("temporary directory should be created");
+        let dir_path = dir.path();
+        let mut segmented_log =
+            SegmentedLog::open(dir_path, RecordLimits::default(), SegmentConfig::default())
+                .expect("opening segmented log should succeed");
+
+        segmented_log
+            .append(&record1)
+            .expect("appending record1 should succeed");
+        segmented_log
+            .append(&record2)
+            .expect("appending record2 should succeed");
+
+        drop(segmented_log.active_segment.log);
+        drop(segmented_log);
+
+        let mut segmented_log =
+            SegmentedLog::open(dir_path, RecordLimits::default(), SegmentConfig::default())
+                .expect("reopening segmented log should succeed");
+        let scanned_records: Vec<_> = segmented_log
+            .scan()
+            .expect("scanning segmented log should succeed")
+            .map(|result| result.expect("scanned record should be Ok"))
+            .collect();
+
+        assert_eq!(
+            segmented_log.next_offset(),
+            2,
+            "next_offset should be 2 after reopening"
+        );
+        assert_eq!(
+            scanned_records.len(),
+            2,
+            "there should be two records after reopening"
+        );
+        assert_eq!(scanned_records[0], record1, "first record should match");
+        assert_eq!(scanned_records[1], record2, "second record should match");
+
+        segmented_log
+            .append(&record3)
+            .expect("appending record3 should succeed");
+        let scanned_records: Vec<_> = segmented_log
+            .scan()
+            .expect("scanning segmented log should succeed")
+            .map(|result| result.expect("scanned record should be Ok"))
+            .collect();
+
+        assert_eq!(
+            segmented_log.next_offset(),
+            3,
+            "next_offset should be 3 after appending record3"
+        );
+        assert_eq!(
+            scanned_records.len(),
+            3,
+            "there should be three records after appending record3"
+        );
+        assert_eq!(scanned_records[2], record3, "third record should match");
     }
 
     #[test]
     fn segmented_log_append_rotates_at_threshold_and_preserves_closed_bytes() {
-        // TODO: Open a fresh directory with max_segment_bytes = 68. Use absent keys and
-        // empty payloads so each record is exactly 34 bytes.
-        // TODO: Append offset 0: expect one 34-byte active file based at 0, next_offset 1.
-        // TODO: Append offset 1: expect the 68-byte file based at 0 to become closed and
-        // a new empty active file named SegmentMetadata::filename(2), next_offset 2.
-        // TODO: Verify the threshold-crossing record (offset 1) remains in the old file.
-        // TODO: Snapshot closed bytes, append offset 2, and verify those bytes are unchanged;
-        // the active file based at 2 should now contain 34 bytes and next_offset should be 3.
-        // TODO: Verify canonical filenames and active metadata lengths; use public scan()
-        // to read all three records and read() to check offsets 1 and 2 across the boundary.
-        todo!("implement threshold rotation and closed-byte stability test");
+        let config = SegmentConfig {
+            max_segment_bytes: NonZeroU64::new(68).expect("max_segment_bytes should be nonzero"),
+            ..Default::default()
+        };
+        let dir = tempfile::tempdir().expect("failed to create temporary directory");
+        let dir_path = dir.path();
+        let record1 = Record::new(0, 1_700_000_000, None, vec![]);
+        let record2 = Record::new(1, 1_700_000_001, None, vec![]);
+        let record3 = Record::new(2, 1_700_000_002, None, vec![]);
+        let mut segmented_log = SegmentedLog::open(dir_path, RecordLimits::default(), config)
+            .expect("failed to open segmented log");
+
+        segmented_log
+            .append(&record1)
+            .expect("appending record1 should succeed");
+
+        assert_eq!(
+            segmented_log.active_segment.metadata.file_len(),
+            34,
+            "active segment file length should be 34 bytes after appending record1"
+        );
+
+        segmented_log
+            .append(&record2)
+            .expect("appending record2 should succeed");
+
+        assert_eq!(
+            segmented_log.active_segment.metadata.file_len(),
+            0,
+            "active segment file length should be 68 bytes after appending record2"
+        );
+
+        let closed_segments = &segmented_log.closed_segments;
+
+        assert_eq!(
+            closed_segments.len(),
+            1,
+            "there should be one closed segment after appending record2"
+        );
+        assert_eq!(
+            closed_segments[0].metadata.file_len(),
+            68,
+            "closed segment file length should be 68 bytes"
+        );
+
+        let closed_setment_path = dir_path.join(SegmentMetadata::filename(0));
+        assert!(
+            closed_setment_path.exists(),
+            "closed segment file should exist"
+        );
+
+        let closed_segment_data =
+            read(&closed_setment_path).expect("failed to read closed segment file");
+        let closed_segment_data_snapshot = closed_segment_data.clone();
+        assert_eq!(
+            closed_segment_data.len(),
+            68,
+            "closed segment file should have 68 bytes"
+        );
+
+        segmented_log
+            .append(&record3)
+            .expect("appending record3 should succeed");
+
+        assert_eq!(
+            segmented_log.active_segment.metadata.file_len(),
+            34,
+            "active segment file length should be 34 bytes after appending record3"
+        );
+        assert_eq!(
+            segmented_log.next_offset, 3,
+            "next_offset should be 3 after appending record3"
+        );
+
+        let closed_segment_data =
+            read(&closed_setment_path).expect("failed to read closed segment file");
+        assert_eq!(
+            closed_segment_data.len(),
+            68,
+            "closed segment file should still have 68 bytes"
+        );
+        assert_eq!(
+            closed_segment_data, closed_segment_data_snapshot,
+            "closed segment data should not change after appending to the active segment"
+        );
+
+        let active_segment_path = dir_path.join(SegmentMetadata::filename(2));
+        assert!(
+            active_segment_path.exists(),
+            "active segment file should exist"
+        );
+
+        let active_segment_data =
+            read(&active_segment_path).expect("failed to read active segment file");
+        assert_eq!(
+            active_segment_data.len(),
+            34,
+            "active segment file should have 34 bytes"
+        );
+        assert_eq!(
+            active_segment_data,
+            record3
+                .encode(&RecordLimits::default())
+                .expect("failed to encode record3"),
+            "active segment data should match the appended record3"
+        );
+
+        let mut scanner = segmented_log
+            .scan()
+            .expect("failed to create scanner for segmented log");
+        let scanned_record1 = scanner
+            .next()
+            .expect("failed to scan record1")
+            .expect("record1 should exist");
+        let scanned_record2 = scanner
+            .next()
+            .expect("failed to scan record2")
+            .expect("record2 should exist");
+        let scanned_record3 = scanner
+            .next()
+            .expect("failed to scan record3")
+            .expect("record3 should exist");
+
+        assert_eq!(
+            scanned_record1, record1,
+            "first scanned record should match record1"
+        );
+        assert_eq!(
+            scanned_record2, record2,
+            "second scanned record should match record2"
+        );
+        assert_eq!(
+            scanned_record3, record3,
+            "third scanned record should match record3"
+        );
+
+        let read_record1 = segmented_log
+            .read(0)
+            .expect("failed to read record1")
+            .expect("record1 should exist");
+        let read_record2 = segmented_log
+            .read(1)
+            .expect("failed to read record2")
+            .expect("record2 should exist");
+        let read_record3 = segmented_log
+            .read(2)
+            .expect("failed to read record3")
+            .expect("record3 should exist");
+
+        assert_eq!(read_record1, record1, "read record1 should match record1");
+        assert_eq!(read_record2, record2, "read record2 should match record2");
+        assert_eq!(read_record3, record3, "read record3 should match record3");
+
+        let segment_files = fs::read_dir(dir_path).expect("failed to read segment directory");
+        assert_eq!(
+            segment_files.count(),
+            2,
+            "there should be two segment files before reading files"
+        );
     }
 
     #[test]
