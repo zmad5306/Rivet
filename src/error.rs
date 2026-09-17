@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+use crate::broker::topic::TopicName;
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum PartitionError {
     OffsetOverflow,
@@ -246,5 +248,109 @@ impl std::error::Error for TopicNameError {
             TopicNameError::InvalidLength { .. } => None,
             TopicNameError::InvalidCharacter { .. } => None,
         }
+    }
+}
+
+#[derive(Debug)]
+pub enum TopicError {
+    AlreadyExists {
+        name: TopicName,
+    },
+    NotFound {
+        name: TopicName,
+    },
+    Io {
+        source: std::io::Error,
+    },
+    Storage {
+        source: StorageError,
+    },
+}
+
+impl std::fmt::Display for TopicError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TopicError::AlreadyExists { name } => {
+                write!(f, "topic {} already exists", name.as_str())
+            }
+            TopicError::NotFound { name } => {
+                write!(f, "topic {} not found", name.as_str())
+            }
+            TopicError::Io { source } => {
+                write!(f, "I/O error: {}", source)
+            }
+            TopicError::Storage { source } => {
+                write!(f, "storage error: {}", source)
+            }
+        }
+    }
+}
+
+impl std::error::Error for TopicError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            TopicError::AlreadyExists { .. } => None,
+            TopicError::NotFound { .. } => None,
+            TopicError::Io { source } => Some(source),
+            TopicError::Storage { source } => Some(source),
+        }
+    }
+}
+
+impl From<std::io::Error> for TopicError {
+    fn from(source: std::io::Error) -> Self {
+        TopicError::Io { source }
+    }
+}
+
+impl From<StorageError> for TopicError {
+    fn from(source: StorageError) -> Self {
+        TopicError::Storage { source }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn topic_already_exists_preserves_name_and_has_no_source() {
+        // Construct AlreadyExists with a validated name. Match the variant,
+        // check the stored name, and verify Error::source() returns None.
+        todo!("test duplicate-topic error");
+    }
+
+    #[test]
+    fn topic_not_found_preserves_name_and_has_no_source() {
+        // Construct NotFound with a validated name. Match the variant,
+        // check the stored name, and verify Error::source() returns None.
+        todo!("test missing-topic error");
+    }
+
+    #[test]
+    fn topic_error_from_io_preserves_kind_and_message() {
+        // Convert an I/O error with a chosen kind and message into TopicError.
+        // Match Io and check that both the kind and message are preserved.
+        todo!("test I/O error conversion");
+    }
+
+    #[test]
+    fn topic_error_from_storage_preserves_variant_and_fields() {
+        // Convert StorageError::UnexpectedOffset with distinct expected/actual
+        // offsets. Check the Storage wrapper, inner variant, and both offsets.
+        todo!("test storage error conversion");
+    }
+
+    #[test]
+    fn topic_io_error_exposes_underlying_source() {
+        // Call Error::source() on a converted I/O error. Downcast the returned
+        // source to std::io::Error and verify its kind and message.
+        todo!("test I/O error source");
+    }
+
+    #[test]
+    fn topic_storage_error_preserves_nested_source_chain() {
+        // Wrap an I/O error in StorageError, then convert it into TopicError.
+        // The first source should downcast to StorageError; its source should
+        // downcast to std::io::Error and retain the original kind and message.
+        todo!("test nested storage error source chain");
     }
 }
