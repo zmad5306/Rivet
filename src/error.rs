@@ -253,18 +253,10 @@ impl std::error::Error for TopicNameError {
 
 #[derive(Debug)]
 pub enum TopicError {
-    AlreadyExists {
-        name: TopicName,
-    },
-    NotFound {
-        name: TopicName,
-    },
-    Io {
-        source: std::io::Error,
-    },
-    Storage {
-        source: StorageError,
-    },
+    AlreadyExists { name: TopicName },
+    NotFound { name: TopicName },
+    Io { source: std::io::Error },
+    Storage { source: StorageError },
 }
 
 impl std::fmt::Display for TopicError {
@@ -311,46 +303,296 @@ impl From<StorageError> for TopicError {
 
 #[cfg(test)]
 mod tests {
+    use crate::{
+        broker::topic::TopicName,
+        error::{CodecError, StorageError, TopicError},
+    };
+    use std::{error::Error, path::PathBuf};
+
     #[test]
     fn topic_already_exists_preserves_name_and_has_no_source() {
-        // Construct AlreadyExists with a validated name. Match the variant,
-        // check the stored name, and verify Error::source() returns None.
-        todo!("test duplicate-topic error");
+        let topic_name = "a-topic";
+        let name = TopicName::new(topic_name.to_string()).expect("failed to create TopicName");
+        let error = TopicError::AlreadyExists { name };
+        assert!(
+            matches!(&error, TopicError::AlreadyExists { name } if name.as_str() == topic_name),
+            "Expected AlreadyExists error with name {}",
+            topic_name
+        );
+        assert!(
+            error.source().is_none(),
+            "Expected no source for AlreadyExists error"
+        );
     }
 
     #[test]
     fn topic_not_found_preserves_name_and_has_no_source() {
-        // Construct NotFound with a validated name. Match the variant,
-        // check the stored name, and verify Error::source() returns None.
-        todo!("test missing-topic error");
+        let topic_name = "a-topic";
+        let name = TopicName::new(topic_name.to_string()).expect("failed to create TopicName");
+        let error = TopicError::NotFound { name };
+        assert!(
+            matches!(&error, TopicError::NotFound { name } if name.as_str() == topic_name),
+            "Expected NotFound error with name {}",
+            topic_name
+        );
+        assert!(
+            error.source().is_none(),
+            "Expected no source for NotFound error"
+        );
     }
 
     #[test]
     fn topic_error_from_io_preserves_kind_and_message() {
-        // Convert an I/O error with a chosen kind and message into TopicError.
-        // Match Io and check that both the kind and message are preserved.
-        todo!("test I/O error conversion");
+        let io_error = std::io::Error::other("oh no!");
+        let error = TopicError::from(io_error);
+        assert!(
+            matches!(error, TopicError::Io { source } if source.kind() == std::io::ErrorKind::Other && source.to_string() == "oh no!")
+        );
     }
 
     #[test]
     fn topic_error_from_storage_preserves_variant_and_fields() {
-        // Convert StorageError::UnexpectedOffset with distinct expected/actual
-        // offsets. Check the Storage wrapper, inner variant, and both offsets.
-        todo!("test storage error conversion");
+        let storage_error = StorageError::UnexpectedOffset {
+            expected: 1,
+            actual: 2,
+        };
+        let error = TopicError::from(storage_error);
+        assert!(
+            matches!(error, TopicError::Storage { source } if matches!(source, StorageError::UnexpectedOffset { expected: 1, actual: 2 }))
+        );
     }
 
     #[test]
     fn topic_io_error_exposes_underlying_source() {
-        // Call Error::source() on a converted I/O error. Downcast the returned
-        // source to std::io::Error and verify its kind and message.
-        todo!("test I/O error source");
+        let io_error = std::io::Error::other("oh no!");
+        let error = TopicError::from(io_error);
+        let source = error.source().expect("Expected a source for the I/O error");
+        let io_source = source
+            .downcast_ref::<std::io::Error>()
+            .expect("Expected source to be std::io::Error");
+        assert_eq!(io_source.kind(), std::io::ErrorKind::Other);
+        assert_eq!(io_source.to_string(), "oh no!");
     }
 
     #[test]
     fn topic_storage_error_preserves_nested_source_chain() {
-        // Wrap an I/O error in StorageError, then convert it into TopicError.
-        // The first source should downcast to StorageError; its source should
-        // downcast to std::io::Error and retain the original kind and message.
-        todo!("test nested storage error source chain");
+        let codec_error = CodecError::IncompleteBody;
+        let path = PathBuf::from("data").join("segments").join("file.log");
+        let byte_position = u64::MAX;
+        let storage_error = StorageError::CorruptRecord {
+            path: path.clone(),
+            byte_position,
+            source: codec_error,
+        };
+        let error = TopicError::from(storage_error);
+        let source = error
+            .source()
+            .expect("Expected a source for the Storage error");
+        let storage_source = source
+            .downcast_ref::<StorageError>()
+            .expect("Expected source to be StorageError");
+        let nested_source = storage_source
+            .source()
+            .expect("Expected a nested source for the Storage error");
+        let codec_source = nested_source
+            .downcast_ref::<CodecError>()
+            .expect("Expected nested source to be CodecError");
+        assert!(
+            matches!(storage_source, StorageError::CorruptRecord { path: path_buf, byte_position: byte_pos, source: _ } if path_buf == &path && *byte_pos == byte_position)
+        );
+        assert!(matches!(codec_source, CodecError::IncompleteBody));
+    }
+
+    #[test]
+    fn storage_codec_conversion_preserves_typed_source() {
+        let error = StorageError::from(CodecError::InvalidChecksum);
+        assert!(matches!(
+            &error,
+            StorageError::Codec(CodecError::InvalidChecksum)
+        ));
+        let source = error.source().expect("codec cause should be retained");
+        assert_eq!(
+            source.downcast_ref::<CodecError>(),
+            Some(&CodecError::InvalidChecksum)
+        );
+        assert!(source.source().is_none());
+        assert!(error.to_string().contains(&source.to_string()));
+    }
+
+    #[test]
+    fn storage_io_conversion_preserves_kind_message_and_source() {
+        let error = StorageError::from(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "cannot open segment",
+        ));
+        assert!(matches!(&error, StorageError::Io(inner)
+            if inner.kind() == std::io::ErrorKind::PermissionDenied));
+        let source = error
+            .source()
+            .unwrap()
+            .downcast_ref::<std::io::Error>()
+            .unwrap();
+        assert_eq!(source.kind(), std::io::ErrorKind::PermissionDenied);
+        assert_eq!(source.to_string(), "cannot open segment");
+        assert!(error.to_string().contains("cannot open segment"));
+    }
+
+    #[test]
+    fn corrupt_record_diagnostic_includes_location_and_cause() {
+        let path = PathBuf::from("data")
+            .join("orders")
+            .join("0")
+            .join("00000000000000000000.log");
+        let error = StorageError::CorruptRecord {
+            path: path.clone(),
+            byte_position: 137,
+            source: CodecError::InvalidChecksum,
+        };
+        let message = error.to_string();
+        assert!(message.contains(path.to_str().unwrap()));
+        assert!(message.contains("byte 137"));
+        assert!(message.contains("invalid checksum"));
+        assert_eq!(
+            error.source().unwrap().downcast_ref::<CodecError>(),
+            Some(&CodecError::InvalidChecksum)
+        );
+    }
+
+    #[test]
+    fn rotation_after_commit_retains_offsets_and_nested_io_cause() {
+        let error = StorageError::RotationAfterCommit {
+            committed_offset: 41,
+            next_offset: 42,
+            source: Box::new(StorageError::from(std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                "rotation destination exists",
+            ))),
+        };
+        assert!(matches!(&error, StorageError::RotationAfterCommit {
+            committed_offset: 41, next_offset: 42, source,
+        } if matches!(source.as_ref(), StorageError::Io(_))));
+        let message = error.to_string();
+        assert!(message.contains("committed offset 41"));
+        assert!(message.contains("next offset 42"));
+        assert!(message.contains("rotation destination exists"));
+        let storage_source = error.source().expect("rotation cause should be retained");
+        let io_source = storage_source
+            .source()
+            .unwrap()
+            .downcast_ref::<std::io::Error>()
+            .unwrap();
+        assert_eq!(io_source.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(io_source.to_string(), "rotation destination exists");
+    }
+
+    #[test]
+    fn storage_layout_diagnostics_include_context_without_sources() {
+        let first = PathBuf::from("first.log");
+        let second = PathBuf::from("second.log");
+        let cases = [
+            (
+                StorageError::InvalidSegmentFilename {
+                    path: first.clone(),
+                },
+                vec!["first.log"],
+            ),
+            (
+                StorageError::UnexpectedSegmentEntry {
+                    path: first.clone(),
+                },
+                vec!["first.log"],
+            ),
+            (
+                StorageError::DuplicateSegmentBaseOffset {
+                    base_offset: 23,
+                    first_path: first.clone(),
+                    second_path: second,
+                },
+                vec!["23", "first.log", "second.log"],
+            ),
+            (
+                StorageError::UnexpectedSegmentBaseOffset {
+                    path: first.clone(),
+                    expected: 23,
+                    actual: 47,
+                },
+                vec!["first.log", "expected 23", "actual 47"],
+            ),
+            (
+                StorageError::EmptyClosedSegment {
+                    path: first,
+                    base_offset: 23,
+                },
+                vec!["first.log", "23"],
+            ),
+            (
+                StorageError::UnexpectedOffset {
+                    expected: 23,
+                    actual: 47,
+                },
+                vec!["expected 23", "actual 47"],
+            ),
+            (StorageError::AppendDisabled, vec!["append disabled"]),
+            (StorageError::OffsetOverflow, vec!["offset overflow"]),
+        ];
+        for (error, details) in cases {
+            assert!(error.source().is_none(), "unexpected source for {error:?}");
+            for detail in details {
+                assert!(
+                    error.to_string().contains(detail),
+                    "missing {detail:?} in {error}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn validation_diagnostics_retain_rejected_values_without_sources() {
+        let config = super::ConfigurationError::InvalidSegmentBytes { value: 0 };
+        assert!(config.to_string().contains('0'));
+        assert!(config.source().is_none());
+        let length = super::TopicNameError::InvalidLength { actual: 129 };
+        assert!(length.to_string().contains("129"));
+        assert!(length.source().is_none());
+        let character = super::TopicNameError::InvalidCharacter { character: '/' };
+        assert!(character.to_string().contains('/'));
+        assert!(character.source().is_none());
+    }
+
+    #[test]
+    fn topic_diagnostics_identify_operation_failure_and_wrapped_cause() {
+        let cases = [
+            (
+                TopicError::AlreadyExists {
+                    name: TopicName::new("orders".into()).unwrap(),
+                },
+                vec!["orders", "already exists"],
+            ),
+            (
+                TopicError::NotFound {
+                    name: TopicName::new("payments".into()).unwrap(),
+                },
+                vec!["payments", "not found"],
+            ),
+            (
+                TopicError::from(std::io::Error::other("disk failure")),
+                vec!["disk failure"],
+            ),
+            (
+                TopicError::from(StorageError::UnexpectedOffset {
+                    expected: 23,
+                    actual: 47,
+                }),
+                vec!["expected 23", "actual 47"],
+            ),
+        ];
+        for (error, details) in cases {
+            for detail in details {
+                assert!(
+                    error.to_string().contains(detail),
+                    "missing {detail:?} in {error}"
+                );
+            }
+        }
     }
 }
