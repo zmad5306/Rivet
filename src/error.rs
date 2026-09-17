@@ -24,18 +24,19 @@ pub enum CodecError {
 
 impl std::fmt::Display for CodecError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            CodecError::InvalidMagic => write!(f, "invalid magic"),
-            CodecError::UnsupportedVersion => write!(f, "unsupported version"),
-            CodecError::KeyTooLarge => write!(f, "key too large"),
-            CodecError::PayloadTooLarge => write!(f, "payload too large"),
-            CodecError::IncompleteHeader => write!(f, "incomplete header"),
-            CodecError::IncompleteBody => write!(f, "incomplete body"),
-            CodecError::LengthOverflow => write!(f, "length overflow"),
-            CodecError::InvalidKeyPresence => write!(f, "invalid key presence"),
-            CodecError::InvalidKeyLength => write!(f, "invalid key length"),
-            CodecError::InvalidChecksum => write!(f, "invalid checksum"),
-        }
+        let message = match self {
+            CodecError::InvalidMagic => "invalid magic",
+            CodecError::UnsupportedVersion => "unsupported version",
+            CodecError::KeyTooLarge => "key too large",
+            CodecError::PayloadTooLarge => "payload too large",
+            CodecError::IncompleteHeader => "incomplete header",
+            CodecError::IncompleteBody => "incomplete body",
+            CodecError::LengthOverflow => "length overflow",
+            CodecError::InvalidKeyPresence => "invalid key presence",
+            CodecError::InvalidKeyLength => "invalid key length",
+            CodecError::InvalidChecksum => "invalid checksum",
+        };
+        f.write_str(message)
     }
 }
 
@@ -251,12 +252,34 @@ impl std::error::Error for TopicNameError {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub enum CatalogEntryErrorReason {
+    InvalidTopicName,
+    NotDirectory,
+    SymbolicLink,
+}
+
 #[derive(Debug)]
 pub enum TopicError {
-    AlreadyExists { name: TopicName },
-    NotFound { name: TopicName },
-    Io { source: std::io::Error },
-    Storage { source: StorageError },
+    AlreadyExists {
+        name: TopicName,
+    },
+    NotFound {
+        name: TopicName,
+    },
+    Io {
+        source: std::io::Error,
+    },
+    Storage {
+        source: StorageError,
+    },
+    MissingPartitionDirectory {
+        path: PathBuf,
+    },
+    UnexpectedCatalogEntry {
+        path: PathBuf,
+        reason: CatalogEntryErrorReason,
+    },
 }
 
 impl std::fmt::Display for TopicError {
@@ -274,6 +297,22 @@ impl std::fmt::Display for TopicError {
             TopicError::Storage { source } => {
                 write!(f, "storage error: {}", source)
             }
+            TopicError::MissingPartitionDirectory { path } => {
+                write!(f, "missing partition directory: {}", path.display())
+            }
+            TopicError::UnexpectedCatalogEntry { path, reason } => {
+                let message = match reason {
+                    CatalogEntryErrorReason::InvalidTopicName => "invalid topic name",
+                    CatalogEntryErrorReason::NotDirectory => "expected a directory",
+                    CatalogEntryErrorReason::SymbolicLink => "symbolic links are not supported",
+                };
+                write!(
+                    f,
+                    "unexpected catalog entry at {}: {}",
+                    path.display(),
+                    message
+                )
+            }
         }
     }
 }
@@ -285,6 +324,8 @@ impl std::error::Error for TopicError {
             TopicError::NotFound { .. } => None,
             TopicError::Io { source } => Some(source),
             TopicError::Storage { source } => Some(source),
+            TopicError::MissingPartitionDirectory { .. } => None,
+            TopicError::UnexpectedCatalogEntry { .. } => None,
         }
     }
 }
@@ -305,9 +346,97 @@ impl From<StorageError> for TopicError {
 mod tests {
     use crate::{
         broker::topic::TopicName,
-        error::{CodecError, StorageError, TopicError},
+        error::{CatalogEntryErrorReason, CodecError, StorageError, TopicError},
     };
     use std::{error::Error, path::PathBuf};
+
+    #[test]
+    fn unexpected_catalog_entry_invalid_name_preserves_context() {
+        let path = PathBuf::from("data").join("bad name");
+        let topic_error = TopicError::UnexpectedCatalogEntry {
+            path: path.clone(),
+            reason: CatalogEntryErrorReason::InvalidTopicName,
+        };
+        assert!(matches!(
+            &topic_error,
+            TopicError::UnexpectedCatalogEntry {
+                path: actual,
+                reason: CatalogEntryErrorReason::InvalidTopicName,
+            } if actual == &path
+        ));
+
+        let diagnostic = topic_error.to_string();
+        assert!(diagnostic.contains("invalid topic name"));
+        assert!(diagnostic.contains(&path.display().to_string()));
+
+        assert!(topic_error.source().is_none());
+    }
+
+    #[test]
+    fn unexpected_catalog_entry_not_directory_preserves_context() {
+        let path = PathBuf::from("data").join("orders");
+        let topic_error = TopicError::UnexpectedCatalogEntry {
+            path: path.clone(),
+            reason: CatalogEntryErrorReason::NotDirectory,
+        };
+        assert!(matches!(
+            &topic_error,
+            TopicError::UnexpectedCatalogEntry {
+                path: actual,
+                reason: CatalogEntryErrorReason::NotDirectory,
+            } if actual == &path
+        ));
+
+        let diagnostic = topic_error.to_string();
+        assert!(diagnostic.contains("expected a directory"));
+        assert!(diagnostic.contains(&path.display().to_string()));
+
+        assert!(topic_error.source().is_none());
+    }
+
+    #[test]
+    fn unexpected_catalog_entry_symbolic_link_preserves_context() {
+        let path = PathBuf::from("data").join("linked_topic");
+        let topic_error = TopicError::UnexpectedCatalogEntry {
+            path: path.clone(),
+            reason: CatalogEntryErrorReason::SymbolicLink,
+        };
+        assert!(matches!(
+            &topic_error,
+            TopicError::UnexpectedCatalogEntry {
+                path: actual,
+                reason: CatalogEntryErrorReason::SymbolicLink,
+            } if actual == &path
+        ));
+
+        let diagnostic = topic_error.to_string();
+        assert!(diagnostic.contains("symbolic links are not supported"));
+        assert!(diagnostic.contains(&path.display().to_string()));
+
+        assert!(topic_error.source().is_none());
+    }
+
+    #[test]
+    fn missing_partition_directory_preserves_path_and_has_no_source() {
+        let path = PathBuf::from("data").join("orders").join("0");
+        let error = TopicError::MissingPartitionDirectory { path: path.clone() };
+
+        assert!(
+            matches!(&error, TopicError::MissingPartitionDirectory { path: actual } if actual == &path),
+            "Expected MissingPartitionDirectory error with path {}",
+            path.display()
+        );
+        assert!(
+            error
+                .to_string()
+                .contains(&format!("missing partition directory: {}", path.display())),
+            "Expected error message to include the problem and path"
+        );
+        assert!(
+            error.source().is_none(),
+            "Expected no source for MissingPartitionDirectory error"
+        );
+    }
 
     #[test]
     fn topic_already_exists_preserves_name_and_has_no_source() {
