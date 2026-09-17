@@ -8,6 +8,10 @@ Do not generate or directly edit production implementation code or test code unl
 
 Follow `docs/DESIGN.md` as the fixed architecture. If implementation evidence conflicts with it, explain the conflict and ask the user before changing the architecture.
 
+## Test stub preference
+
+When the user asks for test stubs, include only test attributes, descriptive function signatures, implementation-guidance comments, TODO comments describing the behavior to test, and a required `todo!()` call so each unfinished test fails. Do not include setup code, variable declarations, constructors, assertions, or helper implementations. The learner writes the implementation inside the test body. Do not add imports for unfinished stubs. Never count stubs as completed tests or verification evidence.
+
 ## Milestone planning and tracking
 
 When the user asks to start or plan a milestone that has a GitHub issue, use the repository-local `rivet-milestone-tracking` skill. Create one comprehensive implementation-tracker comment covering every phase of the milestone, with nested task and test checkboxes and an explicit current position.
