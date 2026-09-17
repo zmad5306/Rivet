@@ -280,6 +280,12 @@ pub enum TopicError {
         path: PathBuf,
         reason: CatalogEntryErrorReason,
     },
+    UnsupportedPartitionId {
+        requested: u32,
+    },
+    UnsupportedPartitionCount {
+        requested: u32,
+    },
 }
 
 impl std::fmt::Display for TopicError {
@@ -313,6 +319,20 @@ impl std::fmt::Display for TopicError {
                     message
                 )
             }
+            TopicError::UnsupportedPartitionId { requested } => {
+                write!(
+                    f,
+                    "unsupported partition id: {}, only partition id 0 is supported",
+                    requested
+                )
+            }
+            TopicError::UnsupportedPartitionCount { requested } => {
+                write!(
+                    f,
+                    "unsupported partition count: {}, only a count of 1 is supported",
+                    requested
+                )
+            }
         }
     }
 }
@@ -326,6 +346,8 @@ impl std::error::Error for TopicError {
             TopicError::Storage { source } => Some(source),
             TopicError::MissingPartitionDirectory { .. } => None,
             TopicError::UnexpectedCatalogEntry { .. } => None,
+            TopicError::UnsupportedPartitionId { .. } => None,
+            TopicError::UnsupportedPartitionCount { .. } => None,
         }
     }
 }
@@ -349,6 +371,44 @@ mod tests {
         error::{CatalogEntryErrorReason, CodecError, StorageError, TopicError},
     };
     use std::{error::Error, path::PathBuf};
+
+    #[test]
+    fn unsupported_partition_id_reports_requested_value_and_has_no_source() {
+        let partition_id: u32 = 3;
+        let error = TopicError::UnsupportedPartitionId {
+            requested: partition_id,
+        };
+
+        assert!(
+            matches!(&error, TopicError::UnsupportedPartitionId { requested: actual } if actual == &partition_id),
+            ""
+        );
+        assert_eq!(
+            &error.to_string(),
+            "unsupported partition id: 3, only partition id 0 is supported",
+            ""
+        );
+        assert!(error.source().is_none(), "");
+    }
+
+    #[test]
+    fn unsupported_partition_count_reports_requested_value_and_has_no_source() {
+        let partition_count: u32 = 2;
+        let error = TopicError::UnsupportedPartitionCount {
+            requested: partition_count,
+        };
+
+        assert!(
+            matches!(&error, TopicError::UnsupportedPartitionCount { requested: actual } if actual == &partition_count),
+            ""
+        );
+        assert_eq!(
+            &error.to_string(),
+            "unsupported partition count: 2, only a count of 1 is supported",
+            ""
+        );
+        assert!(error.source().is_none(), "");
+    }
 
     #[test]
     fn unexpected_catalog_entry_invalid_name_preserves_context() {

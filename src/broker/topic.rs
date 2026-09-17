@@ -1,4 +1,4 @@
-use crate::error::TopicNameError;
+use crate::error::{TopicError, TopicNameError};
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct TopicName {
@@ -25,9 +25,60 @@ impl TopicName {
     }
 }
 
+pub(crate) fn validate_partition_id(requested: u32) -> Result<(), TopicError> {
+    if requested == 0 {
+        return Ok(());
+    }
+    Err(TopicError::UnsupportedPartitionId { requested })
+}
+
+pub(crate) fn validate_partition_count(requested: u32) -> Result<(), TopicError> {
+    if requested == 1 {
+        return Ok(());
+    }
+    Err(TopicError::UnsupportedPartitionCount { requested })
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::error::TopicNameError;
+
+    use crate::error::{TopicError, TopicNameError};
+
+    #[test]
+    fn partition_id_zero_is_accepted() {
+        let result = super::validate_partition_id(0);
+        assert!(result.is_ok(), "partition ID 0 should be accepted");
+    }
+
+    #[test]
+    fn nonzero_partition_ids_are_rejected() {
+        for partition_id in [1, u32::MAX] {
+            let error = super::validate_partition_id(partition_id)
+                .expect_err("nonzero partition IDs should be rejected");
+            assert!(
+                matches!(error, TopicError::UnsupportedPartitionId { requested: actual } if partition_id == actual),
+                "error should report the rejected partition ID"
+            );
+        }
+    }
+
+    #[test]
+    fn partition_count_one_is_accepted() {
+        let result = super::validate_partition_count(1);
+        assert!(result.is_ok(), "partition count 1 should be accepted");
+    }
+
+    #[test]
+    fn unsupported_partition_counts_are_rejected() {
+        for partition_count in [0, 2, u32::MAX] {
+            let error = super::validate_partition_count(partition_count)
+                .expect_err("unsupported partition counts should be rejected");
+            assert!(
+                matches!(error, TopicError::UnsupportedPartitionCount { requested: actual } if partition_count == actual),
+                "error should report the rejected partition count"
+            );
+        }
+    }
 
     #[test]
     fn valid_topic_names_preserve_spelling() {
@@ -46,10 +97,17 @@ mod tests {
         let mut number_of_assertions = 0;
         for name in valid_names {
             let topic_name = super::TopicName::new(name.to_string()).unwrap();
-            assert_eq!(topic_name.as_str(), name);
+            assert_eq!(
+                topic_name.as_str(),
+                name,
+                "topic name spelling should be preserved"
+            );
             number_of_assertions += 1;
         }
-        assert_eq!(number_of_assertions, 9);
+        assert_eq!(
+            number_of_assertions, 9,
+            "all valid topic names should be checked"
+        );
     }
 
     #[test]
@@ -58,30 +116,37 @@ mod tests {
         for i in 1..=128 {
             let name = "a".repeat(i);
             let topic_name = super::TopicName::new(name.clone()).unwrap();
-            assert_eq!(topic_name.as_str(), name);
+            assert_eq!(
+                topic_name.as_str(),
+                name,
+                "topic name should preserve its spelling"
+            );
             number_of_assertions += 1;
         }
-        assert_eq!(number_of_assertions, 128);
+        assert_eq!(
+            number_of_assertions, 128,
+            "every valid topic-name length should be checked"
+        );
     }
 
     #[test]
     fn topic_name_rejects_empty_name() {
         let result = super::TopicName::new("".to_string());
-        assert!(matches!(
-            result,
-            Err(TopicNameError::InvalidLength { actual: 0 })
-        ));
+        assert!(
+            matches!(result, Err(TopicNameError::InvalidLength { actual: 0 })),
+            "an empty topic name should be rejected"
+        );
     }
 
     #[test]
     fn topic_name_rejects_name_longer_than_limit() {
         let name = "a".repeat(129);
         let error = super::TopicName::new(name)
-            .expect_err("Expected error for name longer than 128 characters");
-        assert!(matches!(
-            error,
-            TopicNameError::InvalidLength { actual: 129 }
-        ));
+            .expect_err("a topic name longer than 128 characters should be rejected");
+        assert!(
+            matches!(error, TopicNameError::InvalidLength { actual: 129 }),
+            "the error should report the actual topic-name length"
+        );
     }
 
     #[test]
@@ -98,11 +163,15 @@ mod tests {
         for name in invalid_topic_names {
             let result = super::TopicName::new(name.to_string());
             assert!(
-                matches!(result, Err(TopicNameError::InvalidCharacter { character: c }) if c == name.chars().next().unwrap())
+                matches!(result, Err(TopicNameError::InvalidCharacter { character: c }) if c == name.chars().next().unwrap()),
+                "invalid topic name should report its invalid character"
             );
             number_of_assertions += 1;
         }
-        assert_eq!(number_of_assertions, 6);
+        assert_eq!(
+            number_of_assertions, 6,
+            "all invalid characters should be checked"
+        );
     }
 
     #[test]
@@ -112,11 +181,15 @@ mod tests {
         for name in invalid_topic_names {
             let result = super::TopicName::new(name.to_string());
             assert!(
-                matches!(result, Err(TopicNameError::InvalidCharacter { character: c }) if c == name.chars().next().unwrap())
+                matches!(result, Err(TopicNameError::InvalidCharacter { character: c }) if c == name.chars().next().unwrap()),
+                "path-like topic names should be rejected with their invalid character"
             );
             number_of_assertions += 1;
         }
-        assert_eq!(number_of_assertions, 6);
+        assert_eq!(
+            number_of_assertions, 6,
+            "all path-like topic names should be checked"
+        );
     }
 
     #[test]
@@ -126,10 +199,14 @@ mod tests {
         for [name, first_invalid_char] in invalid_topic_names {
             let result = super::TopicName::new(name.to_string());
             assert!(
-                matches!(result, Err(TopicNameError::InvalidCharacter { character: c }) if c == first_invalid_char.chars().next().expect("Expected a first invalid character"))
+                matches!(result, Err(TopicNameError::InvalidCharacter { character: c }) if c == first_invalid_char.chars().next().expect("invalid-character fixture should not be empty")),
+                "the error should report the first invalid character"
             );
             number_of_assertions += 1;
         }
-        assert_eq!(number_of_assertions, 2);
+        assert_eq!(
+            number_of_assertions, 2,
+            "all first-invalid-character cases should be checked"
+        );
     }
 }
