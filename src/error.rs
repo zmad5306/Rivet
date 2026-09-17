@@ -2,10 +2,36 @@ use std::path::PathBuf;
 
 use crate::broker::topic::TopicName;
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug)]
 pub enum PartitionError {
     OffsetOverflow,
     ClockBeforeEpoch,
+    Storage { source: StorageError },
+}
+
+impl From<StorageError> for PartitionError {
+    fn from(err: StorageError) -> Self {
+        PartitionError::Storage { source: err }
+    }
+}
+
+impl std::fmt::Display for PartitionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PartitionError::OffsetOverflow => write!(f, "offset overflow"),
+            PartitionError::ClockBeforeEpoch => write!(f, "clock before epoch"),
+            PartitionError::Storage { source } => write!(f, "storage error: {}", source),
+        }
+    }
+}
+
+impl std::error::Error for PartitionError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            PartitionError::Storage { source } => Some(source),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
