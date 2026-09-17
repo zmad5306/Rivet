@@ -10,6 +10,8 @@ Follow `docs/DESIGN.md` as the fixed architecture. If implementation evidence co
 
 ## Test stub preference
 
+The user's goal is learning Rust syntax, ownership, borrowing, and standard-library APIs. Give concrete implementation steps and explain the Rust mechanics involved rather than asking the learner to design the solution. Stub comments should be a focused, sequential implementation guide: describe what to construct, which APIs or syntax to use, why borrowing or cloning is needed, and how to check the result. Small syntax references in comments are welcome; do not provide completed implementation statements or assertions. Avoid vague comments that only restate the test name.
+
 When the user asks for test stubs, include only test attributes, descriptive function signatures, implementation-guidance comments, TODO comments describing the behavior to test, and a required `todo!()` call so each unfinished test fails. Do not include setup code, variable declarations, constructors, assertions, or helper implementations. The learner writes the implementation inside the test body. Do not add imports for unfinished stubs. Never count stubs as completed tests or verification evidence.
 
 ## Milestone planning and tracking
