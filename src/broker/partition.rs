@@ -381,6 +381,93 @@ mod tests {
     }
 
     #[test]
+    fn reopening_partition_preserves_records_and_continues_offsets() {
+        let dir = tempfile::tempdir().expect("failed to create temporary directory");
+        let dir_path = dir.path();
+        let config = SegmentConfig::default();
+        let limits = RecordLimits::default();
+        let input0 = PublishInput::new(None, vec![0; 3]);
+        let input1 = PublishInput::new(None, vec![1; 3]);
+        let input2 = PublishInput::new(None, vec![2; 3]);
+        let mut partition =
+            Partition::new(dir_path, config, limits).expect("failed to create partition");
+        let offset0 = partition
+            .publish(input0)
+            .expect("publish should assign offset 0");
+        let offset1 = partition
+            .publish(input1)
+            .expect("publish should assign offset 1");
+
+        assert_eq!(offset0, 0, "publish should assign offset 0");
+        assert_eq!(offset1, 1, "publish should assign offset 1");
+
+        let record0_some = partition.read(0).expect("record at offset 0 should exist");
+        let record1_some = partition.read(1).expect("record at offset 1 should exist");
+        let record2_none = partition
+            .read(2)
+            .expect("record at offset 2 should not exist");
+
+        assert!(record0_some.is_some(), "record at offset 0 should exist");
+        assert!(record1_some.is_some(), "record at offset 1 should exist");
+        assert!(
+            record2_none.is_none(),
+            "record at offset 2 should not exist"
+        );
+
+        let record0 = record0_some.expect("record at offset 0 should exist");
+        let record1 = record1_some.expect("record at offset 1 should exist");
+
+        drop(partition);
+
+        let mut partition =
+            Partition::new(dir_path, config, limits).expect("failed to reopen partition");
+
+        let record0_after = partition
+            .read(0)
+            .expect("record at offset 0 should exist")
+            .expect("record at offset 0 should exist");
+        let record1_after = partition
+            .read(1)
+            .expect("record at offset 1 should exist")
+            .expect("record at offset 1 should exist");
+
+        assert_eq!(
+            record0, record0_after,
+            "record at offset 0 should be preserved after reopening"
+        );
+        assert_eq!(
+            record1, record1_after,
+            "record at offset 1 should be preserved after reopening"
+        );
+
+        let offset2 = partition
+            .publish(input2)
+            .expect("publish should assign offset 2");
+
+        assert_eq!(offset2, 2, "publish should assign offset 2");
+
+        let record0_after_reopen = partition
+            .read(0)
+            .expect("record at offset 0 should exist")
+            .expect("record at offset 0 should exist");
+        let record1_after_reopen = partition
+            .read(1)
+            .expect("record at offset 1 should exist")
+            .expect("record at offset 1 should exist");
+        let record2_after = partition.read(2).expect("record at offset 2 should exist");
+
+        assert_eq!(
+            record0, record0_after_reopen,
+            "record at offset 0 should be preserved after reopening and new append"
+        );
+        assert_eq!(
+            record1, record1_after_reopen,
+            "record at offset 1 should be preserved after reopening and new append"
+        );
+        assert!(record2_after.is_some(), "record at offset 2 should exist");
+    }
+
+    #[test]
     fn rejected_oversized_publish_preserves_records_and_next_offset() {
         let dir = tempfile::tempdir().expect("failed to create temporary directory");
         let dir_path = dir.path();
