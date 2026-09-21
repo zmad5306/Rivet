@@ -465,9 +465,13 @@ mod tests {
         let order_key_0 = vec![0x01];
         let payment_key_0 = vec![0x02];
         let order_key_1 = vec![0x03];
-        let orders_input_0 = PublishInput::new(Some(order_key_0.clone()), vec![0x10, 0x11]);
-        let payments_input_0 = PublishInput::new(Some(payment_key_0.clone()), vec![0x20, 0x21]);
-        let orders_input_1 = PublishInput::new(Some(order_key_1.clone()), vec![0x30, 0x31]);
+        let order_payload_0 = vec![0x10, 0x11];
+        let payment_payload_0 = vec![0x20, 0x21];
+        let order_payload_1 = vec![0x30, 0x31];
+        let orders_input_0 = PublishInput::new(Some(order_key_0.clone()), order_payload_0.clone());
+        let payments_input_0 =
+            PublishInput::new(Some(payment_key_0.clone()), payment_payload_0.clone());
+        let orders_input_1 = PublishInput::new(Some(order_key_1.clone()), order_payload_1.clone());
         let data_root = tempfile::tempdir().expect("failed to create temporary data root");
         let mut broker = Broker::new(
             data_root.path().to_path_buf(),
@@ -543,7 +547,7 @@ mod tests {
         );
         assert_eq!(
             order_0_record.payload(),
-            &vec![0x10, 0x11],
+            &order_payload_0,
             "expected the first order record to have the correct payload"
         );
 
@@ -553,7 +557,7 @@ mod tests {
         );
         assert_eq!(
             payment_0_record.payload(),
-            &vec![0x20, 0x21],
+            &payment_payload_0,
             "expected the first payment record to have the correct payload"
         );
 
@@ -563,7 +567,7 @@ mod tests {
         );
         assert_eq!(
             order_1_record.payload(),
-            &vec![0x30, 0x31],
+            &order_payload_1,
             "expected the second order record to have the correct payload"
         );
 
