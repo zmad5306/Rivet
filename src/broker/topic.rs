@@ -3,7 +3,7 @@ use std::path::Path;
 
 use crate::broker::partition::Partition;
 use crate::error::{TopicError, TopicNameError};
-use crate::storage::record::RecordLimits;
+use crate::storage::record::{PublishInput, Record, RecordLimits};
 use crate::storage::segment::SegmentConfig;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -63,6 +63,17 @@ impl Topic {
 
         Ok(Self { name, partition })
     }
+
+    pub fn publish(&mut self, input: PublishInput) -> Result<u64, TopicError> {
+        let offset = self.partition.publish(input)?;
+        Ok(offset)
+    }
+
+    pub fn read(&self, partition_id: u32, offset: u64) -> Result<Option<Record>, TopicError> {
+        validate_partition_id(partition_id)?;
+        let record = self.partition.read(offset)?;
+        Ok(record)
+    }
 }
 
 pub(crate) fn validate_partition_id(requested: u32) -> Result<(), TopicError> {
@@ -112,6 +123,43 @@ mod tests {
         assert!(
             partition_zero_directory.is_dir(),
             "partition zero directory should exist"
+        );
+    }
+
+    #[test]
+    fn duplicate_topic_creation_returns_already_exists() {
+        let data_root = tempfile::tempdir().expect("failed to create temporary data root");
+        let topic_name_str = "orders";
+        let topic_name =
+            TopicName::new(topic_name_str.to_string()).expect("failed to create TopicName");
+        let duplicate_topic_name =
+            TopicName::new(topic_name_str.to_string()).expect("failed to create TopicName");
+        Topic::create(
+            data_root.path(),
+            topic_name,
+            SegmentConfig::default(),
+            RecordLimits::default(),
+        )
+        .expect("failed to create topic");
+
+        let duplicate_topic_result = Topic::create(
+            data_root.path(),
+            duplicate_topic_name,
+            SegmentConfig::default(),
+            RecordLimits::default(),
+        );
+
+        assert!(
+            matches!(duplicate_topic_result, Err(TopicError::AlreadyExists { name }) if name.as_str() == topic_name_str),
+            "duplicate topic creation should return AlreadyExists error with the correct topic name"
+        );
+
+        let topic_directory = data_root.path().join(topic_name_str);
+        let partition_zero_directory = topic_directory.join("0");
+
+        assert!(
+            partition_zero_directory.is_dir(),
+            "original partition zero directory should still exist"
         );
     }
 
