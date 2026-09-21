@@ -312,6 +312,9 @@ pub enum TopicError {
     UnsupportedPartitionCount {
         requested: u32,
     },
+    Partition {
+        source: PartitionError,
+    },
 }
 
 impl std::fmt::Display for TopicError {
@@ -359,6 +362,9 @@ impl std::fmt::Display for TopicError {
                     requested
                 )
             }
+            TopicError::Partition { source } => {
+                write!(f, "partition error: {}", source)
+            }
         }
     }
 }
@@ -374,6 +380,7 @@ impl std::error::Error for TopicError {
             TopicError::UnexpectedCatalogEntry { .. } => None,
             TopicError::UnsupportedPartitionId { .. } => None,
             TopicError::UnsupportedPartitionCount { .. } => None,
+            TopicError::Partition { source } => Some(source),
         }
     }
 }
@@ -390,11 +397,17 @@ impl From<StorageError> for TopicError {
     }
 }
 
+impl From<PartitionError> for TopicError {
+    fn from(source: PartitionError) -> Self {
+        TopicError::Partition { source }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::{
         broker::topic::TopicName,
-        error::{CatalogEntryErrorReason, CodecError, StorageError, TopicError},
+        error::{CatalogEntryErrorReason, CodecError, PartitionError, StorageError, TopicError},
     };
     use std::{error::Error, path::PathBuf};
 
@@ -575,6 +588,39 @@ mod tests {
         assert!(
             matches!(error, TopicError::Storage { source } if matches!(source, StorageError::UnexpectedOffset { expected: 1, actual: 2 }))
         );
+    }
+
+    #[test]
+    fn topic_error_from_partition_preserves_nested_source_chain() {
+        let storage_error = StorageError::UnexpectedOffset {
+            expected: 1,
+            actual: 2,
+        };
+        let partition_error = PartitionError::Storage {
+            source: storage_error,
+        };
+        let error = TopicError::from(partition_error);
+        let partition_source = error
+            .source()
+            .expect("Expected a source for the Partition error")
+            .downcast_ref::<PartitionError>()
+            .expect("Expected source to be PartitionError");
+        let storage_source = partition_source
+            .source()
+            .expect("Expected a nested source for the Partition error")
+            .downcast_ref::<StorageError>()
+            .expect("Expected nested source to be StorageError");
+
+        assert!(
+            matches!(partition_source, PartitionError::Storage { source } if matches!(source, StorageError::UnexpectedOffset { expected: 1, actual: 2 }))
+        );
+        assert!(matches!(
+            storage_source,
+            StorageError::UnexpectedOffset {
+                expected: 1,
+                actual: 2
+            }
+        ));
     }
 
     #[test]

@@ -1,4 +1,10 @@
+use std::io::ErrorKind::AlreadyExists;
+use std::path::Path;
+
+use crate::broker::partition::Partition;
 use crate::error::{TopicError, TopicNameError};
+use crate::storage::record::RecordLimits;
+use crate::storage::segment::SegmentConfig;
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct TopicName {
@@ -25,6 +31,40 @@ impl TopicName {
     }
 }
 
+#[derive(Debug)]
+pub struct Topic {
+    name: TopicName,
+    partition: Partition,
+}
+
+impl Topic {
+    pub fn name(&self) -> &TopicName {
+        &self.name
+    }
+
+    pub fn create(
+        data_root: &Path,
+        name: TopicName,
+        config: SegmentConfig,
+        limits: RecordLimits,
+    ) -> Result<Self, TopicError> {
+        let topic_directory = data_root.join(name.as_str());
+
+        match std::fs::create_dir(topic_directory.as_path()) {
+            Ok(()) => {}
+            Err(source) if source.kind() == AlreadyExists => {
+                return Err(TopicError::AlreadyExists { name });
+            }
+            Err(source) => return Err(TopicError::from(source)),
+        };
+
+        let partition_directory = topic_directory.join("0");
+        let partition = Partition::new(&partition_directory, config, limits)?;
+
+        Ok(Self { name, partition })
+    }
+}
+
 pub(crate) fn validate_partition_id(requested: u32) -> Result<(), TopicError> {
     if requested == 0 {
         return Ok(());
@@ -42,7 +82,42 @@ pub(crate) fn validate_partition_count(requested: u32) -> Result<(), TopicError>
 #[cfg(test)]
 mod tests {
 
+    use crate::broker::topic::{Topic, TopicName};
     use crate::error::{TopicError, TopicNameError};
+    use crate::storage::record::RecordLimits;
+    use crate::storage::segment::SegmentConfig;
+
+    #[test]
+    fn creating_topic_initializes_partition_zero_under_topic_directory() {
+        let data_root = tempfile::tempdir().expect("failed to create temporary data root");
+        let topic_name_str = "orders";
+        let topic_name =
+            TopicName::new(topic_name_str.to_string()).expect("failed to create TopicName");
+        let topic = Topic::create(
+            data_root.path(),
+            topic_name,
+            SegmentConfig::default(),
+            RecordLimits::default(),
+        )
+        .expect("failed to create topic");
+
+        let topic_directory = data_root.path().join(topic_name_str);
+        let partition_zero_directory = topic_directory.join("0");
+
+        assert_eq!(
+            topic.name().as_str(),
+            topic_name_str,
+            "topic name should match the requested name"
+        );
+        assert!(
+            partition_zero_directory.exists(),
+            "partition zero directory should exist"
+        );
+        assert!(
+            partition_zero_directory.is_dir(),
+            "partition zero directory should exist"
+        );
+    }
 
     #[test]
     fn partition_id_zero_is_accepted() {
