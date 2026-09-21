@@ -368,6 +368,30 @@ mod tests {
     }
 
     #[test]
+    fn read_from_a_known_topic_rejects_a_nonzero_partition_id() {
+        let orders = "orders";
+        let data_root = tempfile::tempdir().expect("failed to create temporary data root");
+        let mut broker = Broker::new(
+            data_root.path().to_path_buf(),
+            SegmentConfig::default(),
+            RecordLimits::default(),
+        );
+
+        broker
+            .create_topic(orders.to_string(), 1)
+            .expect("failed to create topic");
+
+        let error = broker
+            .read(orders, 1, 0)
+            .expect_err("expected an error for unsupported partition ID");
+
+        assert!(
+            matches!(error, TopicError::UnsupportedPartitionId { requested } if requested == 1),
+            "expected an unsupported partition ID error for the requested partition"
+        );
+    }
+
+    #[test]
     fn read_from_a_known_topic_returns_the_published_record() {
         let topic = "orders";
         let data_root = tempfile::tempdir().expect("failed to create temporary data root");
