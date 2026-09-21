@@ -2,7 +2,7 @@ use std::io::ErrorKind::AlreadyExists;
 use std::path::Path;
 
 use crate::broker::partition::Partition;
-use crate::error::{TopicError, TopicNameError};
+use crate::error::{CatalogEntryErrorReason, TopicError, TopicNameError};
 use crate::storage::record::{PublishInput, Record, RecordLimits};
 use crate::storage::segment::SegmentConfig;
 
@@ -88,7 +88,21 @@ impl Topic {
         let partition_directory = topic_directory.join("0");
 
         match std::fs::symlink_metadata(&partition_directory) {
-            Ok(_) => {}
+            Ok(metadata) => {
+                let file_type = metadata.file_type();
+                if file_type.is_symlink() {
+                    return Err(TopicError::UnexpectedCatalogEntry {
+                        path: partition_directory,
+                        reason: CatalogEntryErrorReason::SymbolicLink,
+                    });
+                }
+                if !file_type.is_dir() {
+                    return Err(TopicError::UnexpectedCatalogEntry {
+                        path: partition_directory,
+                        reason: CatalogEntryErrorReason::NotDirectory,
+                    });
+                }
+            }
             Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
                 return Err(TopicError::MissingPartitionDirectory {
                     path: partition_directory,
@@ -121,7 +135,7 @@ pub(crate) fn validate_partition_count(requested: u32) -> Result<(), TopicError>
 mod tests {
 
     use crate::broker::topic::{Topic, TopicName};
-    use crate::error::{TopicError, TopicNameError};
+    use crate::error::{CatalogEntryErrorReason, TopicError, TopicNameError};
     use crate::storage::record::{PublishInput, RecordLimits};
     use crate::storage::segment::SegmentConfig;
 
@@ -237,6 +251,36 @@ mod tests {
         assert!(
             !partition_zero_directory.exists(),
             "partition zero directory should still not exist"
+        );
+    }
+
+    #[test]
+    fn opening_a_topic_with_a_file_as_partition_zero_returns_a_typed_catalog_error() {
+        let data_root = tempfile::tempdir().expect("failed to create temporary data root");
+        let orders_directory = data_root.path().join("orders");
+        std::fs::create_dir(&orders_directory).expect("failed to create orders directory");
+        let partition_zero_file = orders_directory.join("0");
+        std::fs::write(&partition_zero_file, b"sentinel bytes")
+            .expect("failed to write sentinel bytes to partition zero file");
+        let topic_name = TopicName::new("orders".to_string()).expect("failed to create TopicName");
+        let error = Topic::open(
+            data_root.path(),
+            topic_name,
+            SegmentConfig::default(),
+            RecordLimits::default(),
+        )
+        .expect_err("expected error when opening topic with a file as partition zero");
+
+        assert!(
+            matches!(error, TopicError::UnexpectedCatalogEntry { path, reason } if path == partition_zero_file && matches!(reason, CatalogEntryErrorReason::NotDirectory))
+        );
+
+        let sentinel_bytes = std::fs::read(&partition_zero_file)
+            .expect("failed to read sentinel bytes from partition zero file");
+
+        assert_eq!(
+            sentinel_bytes, b"sentinel bytes",
+            "sentinel bytes should be unchanged"
         );
     }
 
