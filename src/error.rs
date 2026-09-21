@@ -281,6 +281,7 @@ pub enum CatalogEntryErrorReason {
     InvalidTopicName,
     NotDirectory,
     SymbolicLink,
+    UnexpectedPartitionEntry,
 }
 
 #[derive(Debug)]
@@ -341,6 +342,9 @@ impl std::fmt::Display for TopicError {
                     CatalogEntryErrorReason::InvalidTopicName => "invalid topic name",
                     CatalogEntryErrorReason::NotDirectory => "expected a directory",
                     CatalogEntryErrorReason::SymbolicLink => "symbolic links are not supported",
+                    CatalogEntryErrorReason::UnexpectedPartitionEntry => {
+                        "unexpected partition entry"
+                    }
                 };
                 write!(
                     f,

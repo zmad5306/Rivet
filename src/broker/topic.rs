@@ -111,6 +111,17 @@ impl Topic {
             Err(source) => return Err(TopicError::Io { source }),
         }
 
+        for entry in std::fs::read_dir(&topic_directory)? {
+            let entry = entry?;
+            let file_name = entry.file_name();
+            if file_name != "0" {
+                return Err(TopicError::UnexpectedCatalogEntry {
+                    path: entry.path(),
+                    reason: CatalogEntryErrorReason::UnexpectedPartitionEntry,
+                });
+            }
+        }
+
         let partition = Partition::new(&partition_directory, config, limits)?;
 
         Ok(Topic { name, partition })
@@ -283,6 +294,49 @@ mod tests {
         assert_eq!(
             sentinel_bytes, b"sentinel bytes",
             "sentinel bytes should be unchanged"
+        );
+    }
+
+    #[test]
+    fn opening_a_topic_with_an_unexpected_partition_entry_returns_a_typed_catalog_error() {
+        let orders = "orders";
+        let data_root = tempfile::tempdir().expect("failed to create temporary data root");
+        let orders_directory = data_root.path().join(orders);
+        let topic = Topic::create(
+            data_root.path(),
+            TopicName::new(orders.to_string()).expect("failed to create TopicName"),
+            SegmentConfig::default(),
+            RecordLimits::default(),
+        )
+        .expect("failed to create topic");
+
+        let unexpected_partition_entry = orders_directory.join("1");
+        std::fs::create_dir(&unexpected_partition_entry)
+            .expect("failed to create unexpected partition entry directory");
+
+        drop(topic);
+
+        let error = Topic::open(
+            data_root.path(),
+            TopicName::new(orders.to_string()).expect("failed to create TopicName"),
+            SegmentConfig::default(),
+            RecordLimits::default(),
+        )
+        .expect_err("expected error when opening topic with an unexpected partition entry");
+
+        assert!(
+            matches!(error, TopicError::UnexpectedCatalogEntry { path, reason } if path == unexpected_partition_entry && matches!(reason, CatalogEntryErrorReason::UnexpectedPartitionEntry)),
+            "error should indicate that the unexpected partition entry is not allowed"
+        );
+
+        let partition_zero_directory = orders_directory.join("0");
+        assert!(
+            partition_zero_directory.exists(),
+            "partition zero directory should still exist"
+        );
+        assert!(
+            unexpected_partition_entry.exists(),
+            "unexpected partition entry should still exist"
         );
     }
 
