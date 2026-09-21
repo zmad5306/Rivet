@@ -110,10 +110,6 @@ mod tests {
             "topic name should match the requested name"
         );
         assert!(
-            partition_zero_directory.exists(),
-            "partition zero directory should exist"
-        );
-        assert!(
             partition_zero_directory.is_dir(),
             "partition zero directory should exist"
         );
