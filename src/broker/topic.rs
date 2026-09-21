@@ -246,7 +246,8 @@ mod tests {
         .expect_err("expected error when opening topic without partition zero");
 
         assert!(
-            matches!(error, TopicError::MissingPartitionDirectory { path } if path == partition_zero_directory)
+            matches!(error, TopicError::MissingPartitionDirectory { path } if path == partition_zero_directory),
+            "error should indicate missing partition zero directory"
         );
         assert!(
             !partition_zero_directory.exists(),
@@ -272,7 +273,8 @@ mod tests {
         .expect_err("expected error when opening topic with a file as partition zero");
 
         assert!(
-            matches!(error, TopicError::UnexpectedCatalogEntry { path, reason } if path == partition_zero_file && matches!(reason, CatalogEntryErrorReason::NotDirectory))
+            matches!(error, TopicError::UnexpectedCatalogEntry { path, reason } if path == partition_zero_file && matches!(reason, CatalogEntryErrorReason::NotDirectory)),
+            "error should indicate that partition zero is not a directory"
         );
 
         let sentinel_bytes = std::fs::read(&partition_zero_file)
@@ -281,6 +283,51 @@ mod tests {
         assert_eq!(
             sentinel_bytes, b"sentinel bytes",
             "sentinel bytes should be unchanged"
+        );
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn opening_a_topic_with_a_partition_zero_symlink_returns_a_typed_catalog_error() {
+        let data_root = tempfile::tempdir().expect("failed to create temporary data root");
+        let orders_directory = data_root.path().join("orders");
+        std::fs::create_dir(&orders_directory).expect("failed to create orders directory");
+        let real_target_directory = data_root.path().join("real_target");
+        std::fs::create_dir(&real_target_directory)
+            .expect("failed to create real target directory");
+        let partition_zero_symlink = orders_directory.join("0");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&real_target_directory, &partition_zero_symlink)
+            .expect("failed to create symlink for partition zero");
+        #[cfg(windows)]
+        match std::os::windows::fs::symlink_dir(&real_target_directory, &partition_zero_symlink) {
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => return,
+            Err(e) => panic!("failed to create symlink for partition zero: {}", e),
+        }
+        let partition_zero_symlink_path = partition_zero_symlink.as_path();
+        let error = Topic::open(
+            data_root.path(),
+            TopicName::new("orders".to_string()).expect("failed to create TopicName"),
+            SegmentConfig::default(),
+            RecordLimits::default(),
+        )
+        .expect_err("expected error when opening topic with a partition zero symlink");
+        assert!(
+            matches!(error, TopicError::UnexpectedCatalogEntry { path, reason } if path == partition_zero_symlink_path && matches!(reason, CatalogEntryErrorReason::SymbolicLink)),
+            "expected error to indicate that partition zero is a symbolic link"
+        );
+        assert!(
+            partition_zero_symlink_path
+                .symlink_metadata()
+                .expect("failed to get symlink metadata")
+                .file_type()
+                .is_symlink(),
+            "partition zero should still be a symlink"
+        );
+        assert!(
+            real_target_directory.exists(),
+            "real target directory should still exist"
         );
     }
 
