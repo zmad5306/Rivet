@@ -6,8 +6,8 @@ use crate::error::{TopicError, TopicNameError};
 use crate::storage::record::{PublishInput, Record, RecordLimits};
 use crate::storage::segment::SegmentConfig;
 
-#[derive(Debug, PartialEq, Eq)]
-pub struct TopicName {
+#[derive(Debug, PartialEq, Eq, Clone, PartialOrd, Ord)]
+pub(crate) struct TopicName {
     value: String,
 }
 
@@ -26,13 +26,14 @@ impl TopicName {
         }
         Ok(Self { value })
     }
+
     pub fn as_str(&self) -> &str {
         &self.value
     }
 }
 
 #[derive(Debug)]
-pub struct Topic {
+pub(crate) struct Topic {
     name: TopicName,
     partition: Partition,
 }
@@ -47,21 +48,23 @@ impl Topic {
         name: TopicName,
         config: SegmentConfig,
         limits: RecordLimits,
-    ) -> Result<Self, TopicError> {
+    ) -> Result<Topic, TopicError> {
         let topic_directory = data_root.join(name.as_str());
 
         match std::fs::create_dir(topic_directory.as_path()) {
             Ok(()) => {}
             Err(source) if source.kind() == AlreadyExists => {
-                return Err(TopicError::AlreadyExists { name });
+                return Err(TopicError::AlreadyExists {
+                    name: name.as_str().to_string(),
+                });
             }
-            Err(source) => return Err(TopicError::from(source)),
+            Err(source) => return Err(TopicError::Io { source }),
         };
 
         let partition_directory = topic_directory.join("0");
         let partition = Partition::new(&partition_directory, config, limits)?;
 
-        Ok(Self { name, partition })
+        Ok(Topic { name, partition })
     }
 
     pub fn publish(&mut self, input: PublishInput) -> Result<u64, TopicError> {

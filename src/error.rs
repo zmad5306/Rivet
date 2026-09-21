@@ -1,7 +1,5 @@
 use std::path::PathBuf;
 
-use crate::broker::topic::TopicName;
-
 #[derive(Debug)]
 pub enum PartitionError {
     OffsetOverflow,
@@ -288,10 +286,10 @@ pub enum CatalogEntryErrorReason {
 #[derive(Debug)]
 pub enum TopicError {
     AlreadyExists {
-        name: TopicName,
+        name: String,
     },
     NotFound {
-        name: TopicName,
+        name: String,
     },
     Io {
         source: std::io::Error,
@@ -418,9 +416,8 @@ impl From<TopicNameError> for TopicError {
 
 #[cfg(test)]
 mod tests {
-    use crate::{
-        broker::topic::TopicName,
-        error::{CatalogEntryErrorReason, CodecError, PartitionError, StorageError, TopicError},
+    use crate::error::{
+        CatalogEntryErrorReason, CodecError, PartitionError, StorageError, TopicError,
     };
     use std::{error::Error, path::PathBuf};
 
@@ -552,13 +549,14 @@ mod tests {
 
     #[test]
     fn topic_already_exists_preserves_name_and_has_no_source() {
-        let topic_name = "a-topic";
-        let name = TopicName::new(topic_name.to_string()).expect("failed to create TopicName");
-        let error = TopicError::AlreadyExists { name };
+        let name = "a-topic";
+        let error = TopicError::AlreadyExists {
+            name: name.to_string(),
+        };
         assert!(
-            matches!(&error, TopicError::AlreadyExists { name } if name.as_str() == topic_name),
+            matches!(&error, TopicError::AlreadyExists { name: actual } if actual == name),
             "Expected AlreadyExists error with name {}",
-            topic_name
+            name
         );
         assert!(
             error.source().is_none(),
@@ -568,13 +566,14 @@ mod tests {
 
     #[test]
     fn topic_not_found_preserves_name_and_has_no_source() {
-        let topic_name = "a-topic";
-        let name = TopicName::new(topic_name.to_string()).expect("failed to create TopicName");
-        let error = TopicError::NotFound { name };
+        let name = "a-topic";
+        let error = TopicError::NotFound {
+            name: name.to_string(),
+        };
         assert!(
-            matches!(&error, TopicError::NotFound { name } if name.as_str() == topic_name),
+            matches!(&error, TopicError::NotFound { name: actual } if actual == name),
             "Expected NotFound error with name {}",
-            topic_name
+            name
         );
         assert!(
             error.source().is_none(),
@@ -838,13 +837,13 @@ mod tests {
         let cases = [
             (
                 TopicError::AlreadyExists {
-                    name: TopicName::new("orders".into()).unwrap(),
+                    name: "orders".to_string(),
                 },
                 vec!["orders", "already exists"],
             ),
             (
                 TopicError::NotFound {
-                    name: TopicName::new("payments".into()).unwrap(),
+                    name: "payments".to_string(),
                 },
                 vec!["payments", "not found"],
             ),
