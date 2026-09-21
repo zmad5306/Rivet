@@ -277,6 +277,41 @@ mod tests {
     }
 
     #[test]
+    fn create_topic_rejects_a_file_data_root_without_exposing_a_catalog_entry() {
+        let orders = "orders";
+        let parent_dir = tempfile::tempdir().expect("failed to create temporary parent directory");
+        let data_root_file = parent_dir.path().join("data_root_file");
+        std::fs::write(&data_root_file, b"sentinel bytes").expect("failed to create sentinel file");
+
+        let mut broker = Broker::new(
+            data_root_file.clone(),
+            SegmentConfig::default(),
+            RecordLimits::default(),
+        );
+
+        let error = broker
+            .create_topic(orders.to_string(), 1)
+            .expect_err("expected an error for a file data root");
+
+        assert!(
+            matches!(error, TopicError::Io { .. }),
+            "expected an I/O error for a file data root"
+        );
+
+        assert!(
+            broker.list_topics().is_empty(),
+            "expected no topics to be listed after failing to create a topic due to a file data root"
+        );
+
+        let contents = std::fs::read(&data_root_file).expect("failed to read sentinel file");
+
+        assert_eq!(
+            contents, b"sentinel bytes",
+            "expected the sentinel file contents to remain unchanged"
+        );
+    }
+
+    #[test]
     fn duplicate_topic_creation_preserves_the_original_catalog_entry_and_record() {
         let orders = "orders";
         let key = vec![0, 255];
