@@ -211,6 +211,16 @@ rivet topic list
 
 Topic deletion is not part of the first implementation.
 
+### Startup catalog policy
+
+Broker startup is fail-fast and atomic. It either opens the complete catalog or returns a typed error; callers must never receive a partially discovered catalog.
+
+Every direct child of the configured data root must be a real directory whose name is a valid topic name. Invalid or non-UTF-8 names are rejected as malformed catalog entries with the offending path. Regular files and other non-directory entries are rejected. Symbolic links, junctions, and other filesystem aliases are not valid topic directories because they can place broker data outside the configured root.
+
+Every topic directory must contain exactly one supported partition directory named `0`. A missing partition `0` is an error and must not cause startup to initialize a replacement. Partition `0` must be a real directory; files, symbolic links, junctions, and other aliases are rejected. Unexpected partition entries are malformed catalog entries and fail startup rather than being ignored.
+
+Malformed catalog entries are never overwritten, deleted, followed, or silently repaired. Errors retain the offending path and preserve underlying I/O or storage causes where one exists. Opening each valid partition delegates record and segment validation to storage recovery: a partial active-tail record may be truncated as described in the crash-recovery policy, while fatal corruption fails the entire broker startup without exposing a partial catalog.
+
 When multiple partitions are introduced:
 
 ```text
