@@ -3,7 +3,7 @@ pub mod topic;
 
 use self::topic::Topic;
 use crate::broker::topic::{TopicName, validate_partition_count};
-use crate::error::TopicError;
+use crate::error::{CatalogEntryErrorReason, TopicError};
 use crate::storage::record::{PublishInput, Record};
 use crate::storage::{record::RecordLimits, segment::SegmentConfig};
 use std::{collections::BTreeMap, path::PathBuf};
@@ -38,17 +38,59 @@ pub struct Broker {
 }
 
 impl Broker {
-    pub fn new(
+    pub fn open(
         data_root: PathBuf,
         segment_config: SegmentConfig,
         record_limits: RecordLimits,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, TopicError> {
+        std::fs::create_dir_all(&data_root)?;
+        let mut topics = BTreeMap::new();
+        for read_result in std::fs::read_dir(&data_root)? {
+            let entry = read_result?;
+
+            if entry.file_type()?.is_symlink() {
+                return Err(TopicError::UnexpectedCatalogEntry {
+                    path: entry.path(),
+                    reason: CatalogEntryErrorReason::SymbolicLink,
+                });
+            }
+
+            if !entry.file_type()?.is_dir() {
+                return Err(TopicError::UnexpectedCatalogEntry {
+                    path: entry.path(),
+                    reason: CatalogEntryErrorReason::NotDirectory,
+                });
+            }
+
+            let file_name = entry.file_name().into_string().map_err(|_| {
+                TopicError::UnexpectedCatalogEntry {
+                    path: entry.path(),
+                    reason: CatalogEntryErrorReason::InvalidTopicName,
+                }
+            })?;
+
+            let topic_name =
+                TopicName::new(file_name).map_err(|_| TopicError::UnexpectedCatalogEntry {
+                    path: entry.path(),
+                    reason: CatalogEntryErrorReason::InvalidTopicName,
+                })?;
+
+            let topic = Topic::open(
+                &data_root,
+                topic_name.clone(),
+                segment_config,
+                record_limits,
+            )?;
+
+            topics.insert(topic_name, topic);
+        }
+
+        Ok(Self {
             data_root,
-            topics: BTreeMap::new(),
+            topics,
             segment_config,
             record_limits,
-        }
+        })
     }
 
     pub fn create_topic(&mut self, name: String, partition_count: u32) -> Result<(), TopicError> {
@@ -119,11 +161,12 @@ mod tests {
     #[test]
     fn create_topic_rejects_unsupported_partition_count_before_creating_directory() {
         let data_root = tempfile::tempdir().expect("failed to create temporary data root");
-        let mut broker = Broker::new(
+        let mut broker = Broker::open(
             data_root.path().to_path_buf(),
             SegmentConfig::default(),
             RecordLimits::default(),
-        );
+        )
+        .expect("failed to open broker");
         let name = "orders".to_string();
         let error = broker
             .create_topic(name.clone(), 2)
@@ -145,11 +188,12 @@ mod tests {
     #[test]
     fn create_topic_adds_the_initialized_topic_to_the_catalog() {
         let data_root = tempfile::tempdir().expect("failed to create temporary data root");
-        let mut broker = Broker::new(
+        let mut broker = Broker::open(
             data_root.path().to_path_buf(),
             SegmentConfig::default(),
             RecordLimits::default(),
-        );
+        )
+        .expect("failed to open broker");
         let name = "orders".to_string();
 
         broker
@@ -175,11 +219,12 @@ mod tests {
         let topic_name_2 = "alpha";
         let topic_name_3 = "middle";
         let data_root = tempfile::tempdir().expect("failed to create temporary data root");
-        let mut broker = Broker::new(
+        let mut broker = Broker::open(
             data_root.path().to_path_buf(),
             SegmentConfig::default(),
             RecordLimits::default(),
-        );
+        )
+        .expect("failed to open broker");
 
         assert!(
             broker.list_topics().is_empty(),
@@ -205,13 +250,62 @@ mod tests {
     }
 
     #[test]
-    fn create_topic_rejects_an_invalid_raw_name_before_mutating_state() {
+    fn opening_a_broker_discovers_an_existing_topic_and_restores_its_record() {
+        let key = b"key".to_vec();
+        let payload = b"payload".to_vec();
+        let input = PublishInput::new(Some(key.clone()), payload.clone());
+        let orders = "orders";
         let data_root = tempfile::tempdir().expect("failed to create temporary data root");
-        let mut broker = Broker::new(
+        let mut broker = Broker::open(
             data_root.path().to_path_buf(),
             SegmentConfig::default(),
             RecordLimits::default(),
+        )
+        .expect("failed to open broker");
+        broker
+            .create_topic(orders.to_string(), 1)
+            .expect("failed to create topic");
+        let result = broker
+            .publish(orders, input)
+            .expect("failed to publish record");
+
+        drop(broker);
+
+        let broker = Broker::open(
+            data_root.path().to_path_buf(),
+            SegmentConfig::default(),
+            RecordLimits::default(),
+        )
+        .expect("failed to open broker");
+
+        assert_eq!(
+            broker.list_topics(),
+            vec![orders],
+            "expected the reopened broker to list exactly the 'orders' topic"
         );
+
+        let record = broker
+            .read(orders, result.partition(), result.offset())
+            .expect("failed to read record")
+            .expect("expected the record to exist");
+
+        assert_eq!(
+            record.key().expect("expected the record to have a key"),
+            &key
+        );
+        assert_eq!(record.payload(), &payload);
+        assert_eq!(record.offset(), result.offset());
+    }
+
+    #[test]
+    fn create_topic_rejects_an_invalid_raw_name_before_mutating_state() {
+        let data_root = tempfile::tempdir().expect("failed to create temporary data root");
+        let mut broker = Broker::open(
+            data_root.path().to_path_buf(),
+            SegmentConfig::default(),
+            RecordLimits::default(),
+        )
+        .expect("failed to open broker");
         let error = broker
             .create_topic("bad/name".to_string(), 1)
             .expect_err("expected an error for invalid topic name");
@@ -245,11 +339,12 @@ mod tests {
     #[test]
     fn create_topic_rejects_an_existing_file_without_exposing_a_catalog_entry() {
         let data_root = tempfile::tempdir().expect("failed to create temporary data root");
-        let mut broker = Broker::new(
+        let mut broker = Broker::open(
             data_root.path().to_path_buf(),
             SegmentConfig::default(),
             RecordLimits::default(),
-        );
+        )
+        .expect("failed to open broker");
 
         let orders_path = data_root.path().join("orders");
         std::fs::write(&orders_path, b"sentinel bytes").expect("failed to create sentinel file");
@@ -277,34 +372,23 @@ mod tests {
     }
 
     #[test]
-    fn create_topic_rejects_a_file_data_root_without_exposing_a_catalog_entry() {
-        let orders = "orders";
+    fn opening_a_broker_rejects_a_file_data_root_without_overwriting_it() {
         let parent_dir = tempfile::tempdir().expect("failed to create temporary parent directory");
-        let data_root_file = parent_dir.path().join("data_root_file");
-        std::fs::write(&data_root_file, b"sentinel bytes").expect("failed to create sentinel file");
-
-        let mut broker = Broker::new(
-            data_root_file.clone(),
+        let data_root = parent_dir.path().join("data_root_file");
+        std::fs::write(&data_root, b"sentinel bytes").expect("failed to create sentinel file");
+        let error = Broker::open(
+            data_root.clone(),
             SegmentConfig::default(),
             RecordLimits::default(),
-        );
-
-        let error = broker
-            .create_topic(orders.to_string(), 1)
-            .expect_err("expected an error for a file data root");
+        )
+        .expect_err("expected an error for a file data root");
 
         assert!(
             matches!(error, TopicError::Io { .. }),
             "expected an I/O error for a file data root"
         );
 
-        assert!(
-            broker.list_topics().is_empty(),
-            "expected no topics to be listed after failing to create a topic due to a file data root"
-        );
-
-        let contents = std::fs::read(&data_root_file).expect("failed to read sentinel file");
-
+        let contents = std::fs::read(&data_root).expect("failed to read sentinel file");
         assert_eq!(
             contents, b"sentinel bytes",
             "expected the sentinel file contents to remain unchanged"
@@ -318,11 +402,12 @@ mod tests {
         let payload = vec![1, 0, 254];
         let publish_input = PublishInput::new(Some(key.clone()), payload.clone());
         let data_root = tempfile::tempdir().expect("failed to create temporary data root");
-        let mut broker = Broker::new(
+        let mut broker = Broker::open(
             data_root.path().to_path_buf(),
             SegmentConfig::default(),
             RecordLimits::default(),
-        );
+        )
+        .expect("failed to open broker");
 
         broker
             .create_topic(orders.to_string(), 1)
@@ -374,11 +459,12 @@ mod tests {
     #[test]
     fn publish_to_a_missing_topic_returns_not_found_without_creating_state() {
         let data_root = tempfile::tempdir().expect("failed to create temporary data root");
-        let mut broker = Broker::new(
+        let mut broker = Broker::open(
             data_root.path().to_path_buf(),
             SegmentConfig::default(),
             RecordLimits::default(),
-        );
+        )
+        .expect("failed to open broker");
         let input = PublishInput::new(None, vec![1, 2, 3]);
         let name = "missing";
         let error = broker
@@ -402,11 +488,12 @@ mod tests {
     #[test]
     fn publish_to_a_known_topic_reports_topic_partition_and_offset() {
         let data_root = tempfile::tempdir().expect("failed to create temporary data root");
-        let mut broker = Broker::new(
+        let mut broker = Broker::open(
             data_root.path().to_path_buf(),
             SegmentConfig::default(),
             RecordLimits::default(),
-        );
+        )
+        .expect("failed to open broker");
 
         broker
             .create_topic("orders".to_string(), 1)
@@ -438,11 +525,12 @@ mod tests {
     #[test]
     fn read_from_a_missing_topic_returns_not_found_without_creating_state() {
         let data_root = tempfile::tempdir().expect("failed to create temporary data root");
-        let broker = Broker::new(
+        let broker = Broker::open(
             data_root.path().to_path_buf(),
             SegmentConfig::default(),
             RecordLimits::default(),
-        );
+        )
+        .expect("failed to open broker");
         let name = "missing";
         let error = broker
             .read(name, 0, 0)
@@ -466,11 +554,12 @@ mod tests {
     fn read_from_a_known_topic_rejects_a_nonzero_partition_id() {
         let orders = "orders";
         let data_root = tempfile::tempdir().expect("failed to create temporary data root");
-        let mut broker = Broker::new(
+        let mut broker = Broker::open(
             data_root.path().to_path_buf(),
             SegmentConfig::default(),
             RecordLimits::default(),
-        );
+        )
+        .expect("failed to open broker");
 
         broker
             .create_topic(orders.to_string(), 1)
@@ -490,11 +579,12 @@ mod tests {
     fn read_from_a_known_topic_returns_the_published_record() {
         let topic = "orders";
         let data_root = tempfile::tempdir().expect("failed to create temporary data root");
-        let mut broker = Broker::new(
+        let mut broker = Broker::open(
             data_root.path().to_path_buf(),
             SegmentConfig::default(),
             RecordLimits::default(),
-        );
+        )
+        .expect("failed to open broker");
         let key0 = vec![0, 255];
         let key1 = vec![0, 255];
         let payload0 = vec![1, 0, 254];
@@ -592,11 +682,12 @@ mod tests {
             PublishInput::new(Some(payment_key_0.clone()), payment_payload_0.clone());
         let orders_input_1 = PublishInput::new(Some(order_key_1.clone()), order_payload_1.clone());
         let data_root = tempfile::tempdir().expect("failed to create temporary data root");
-        let mut broker = Broker::new(
+        let mut broker = Broker::open(
             data_root.path().to_path_buf(),
             SegmentConfig::default(),
             RecordLimits::default(),
-        );
+        )
+        .expect("failed to open broker");
 
         broker
             .create_topic(orders_topic.to_string(), 1)
