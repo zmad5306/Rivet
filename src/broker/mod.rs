@@ -457,4 +457,120 @@ mod tests {
             "expected the record to have the correct payload"
         );
     }
+
+    #[test]
+    fn interleaved_publishes_to_multiple_topics_keep_offsets_and_records_isolated() {
+        let orders_topic = "orders";
+        let payments_topic = "payments";
+        let order_key_0 = vec![0x01];
+        let payment_key_0 = vec![0x02];
+        let order_key_1 = vec![0x03];
+        let orders_input_0 = PublishInput::new(Some(order_key_0.clone()), vec![0x10, 0x11]);
+        let payments_input_0 = PublishInput::new(Some(payment_key_0.clone()), vec![0x20, 0x21]);
+        let orders_input_1 = PublishInput::new(Some(order_key_1.clone()), vec![0x30, 0x31]);
+        let data_root = tempfile::tempdir().expect("failed to create temporary data root");
+        let mut broker = Broker::new(
+            data_root.path().to_path_buf(),
+            SegmentConfig::default(),
+            RecordLimits::default(),
+        );
+
+        broker
+            .create_topic(orders_topic.to_string(), 1)
+            .expect("failed to create orders topic");
+        broker
+            .create_topic(payments_topic.to_string(), 1)
+            .expect("failed to create payments topic");
+
+        let order_0_result = broker
+            .publish(orders_topic, orders_input_0)
+            .expect("failed to publish to orders topic");
+        let payment_0_result = broker
+            .publish(payments_topic, payments_input_0)
+            .expect("failed to publish to payments topic");
+        let order_1_result = broker
+            .publish(orders_topic, orders_input_1)
+            .expect("failed to publish to orders topic");
+
+        assert_eq!(
+            order_0_result.offset(),
+            0,
+            "expected the first order publish to have offset 0"
+        );
+        assert_eq!(
+            payment_0_result.offset(),
+            0,
+            "expected the first payment publish to have offset 0"
+        );
+        assert_eq!(
+            order_1_result.offset(),
+            1,
+            "expected the second order publish to have offset 1"
+        );
+
+        let order_0_record = broker
+            .read(orders_topic, 0, order_0_result.offset())
+            .expect("failed to read first order record")
+            .expect("expected a record");
+        let payment_0_record = broker
+            .read(payments_topic, 0, payment_0_result.offset())
+            .expect("failed to read first payment record")
+            .expect("expected a record");
+        let order_1_record = broker
+            .read(orders_topic, 0, order_1_result.offset())
+            .expect("failed to read second order record")
+            .expect("expected a record");
+        let order_2_none = broker
+            .read(orders_topic, 0, order_1_result.offset() + 1)
+            .expect("failed to read third order record");
+        let payment_1_none = broker
+            .read(payments_topic, 0, payment_0_result.offset() + 1)
+            .expect("failed to read second payment record");
+
+        let order_0_record_key = order_0_record
+            .key()
+            .expect("expected the first order record to have a key");
+        let payment_0_record_key = payment_0_record
+            .key()
+            .expect("expected the first payment record to have a key");
+        let order_1_record_key = order_1_record
+            .key()
+            .expect("expected the second order record to have a key");
+
+        assert_eq!(
+            order_0_record_key, order_key_0,
+            "expected the first order record to have the correct key"
+        );
+        assert_eq!(
+            order_0_record.payload(),
+            &vec![0x10, 0x11],
+            "expected the first order record to have the correct payload"
+        );
+
+        assert_eq!(
+            payment_0_record_key, payment_key_0,
+            "expected the first payment record to have the correct key"
+        );
+        assert_eq!(
+            payment_0_record.payload(),
+            &vec![0x20, 0x21],
+            "expected the first payment record to have the correct payload"
+        );
+
+        assert_eq!(
+            order_1_record_key, order_key_1,
+            "expected the second order record to have the correct key"
+        );
+        assert_eq!(
+            order_1_record.payload(),
+            &vec![0x30, 0x31],
+            "expected the second order record to have the correct payload"
+        );
+
+        assert!(order_2_none.is_none(), "expected no third order record");
+        assert!(
+            payment_1_none.is_none(),
+            "expected no second payment record"
+        );
+    }
 }
