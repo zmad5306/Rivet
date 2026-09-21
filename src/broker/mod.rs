@@ -157,9 +157,16 @@ mod tests {
             .expect("failed to create topic");
 
         let topics = broker.list_topics();
-        assert_eq!(topics, vec![name.as_str()]);
 
-        assert!(data_root.path().join(&name).join("0").is_dir());
+        assert_eq!(
+            topics,
+            vec![name.as_str()],
+            "expected the created topic to be listed"
+        );
+        assert!(
+            data_root.path().join(&name).join("0").is_dir(),
+            "expected the partition directory to exist"
+        );
     }
 
     #[test]
@@ -174,7 +181,10 @@ mod tests {
             RecordLimits::default(),
         );
 
-        assert!(broker.list_topics().is_empty());
+        assert!(
+            broker.list_topics().is_empty(),
+            "expected no topics to be listed initially"
+        );
 
         broker
             .create_topic(topic_name_1.to_string(), 1)
@@ -187,7 +197,11 @@ mod tests {
             .expect("failed to create topic");
 
         let topics = broker.list_topics();
-        assert_eq!(topics, vec![topic_name_2, topic_name_3, topic_name_1]);
+        assert_eq!(
+            topics,
+            vec![topic_name_2, topic_name_3, topic_name_1],
+            "expected topics to be listed in sorted order"
+        );
     }
 
     #[test]
@@ -218,8 +232,14 @@ mod tests {
             "expected an invalid character error for '/'"
         );
 
-        assert!(broker.list_topics().is_empty());
-        assert!(!data_root.path().join("bad").exists());
+        assert!(
+            broker.list_topics().is_empty(),
+            "expected no topics to be listed after invalid topic creation"
+        );
+        assert!(
+            !data_root.path().join("bad").exists(),
+            "expected the invalid topic directory not to exist"
+        );
     }
 
     #[test]
@@ -243,11 +263,17 @@ mod tests {
             "expected an already exists error"
         );
 
-        assert!(broker.list_topics().is_empty());
+        assert!(
+            broker.list_topics().is_empty(),
+            "expected no topics to be listed after failing to create a topic due to an existing file"
+        );
 
         let contents = std::fs::read(&orders_path).expect("failed to read sentinel file");
 
-        assert_eq!(contents, b"sentinel bytes");
+        assert_eq!(
+            contents, b"sentinel bytes",
+            "expected the sentinel file contents to remain unchanged"
+        );
     }
 
     #[test]
@@ -268,8 +294,14 @@ mod tests {
             matches!(error, TopicError::NotFound { name } if name.as_str() == "missing"),
             "expected a not found error for the missing topic"
         );
-        assert!(broker.list_topics().is_empty());
-        assert!(!data_root.path().join("missing").exists());
+        assert!(
+            broker.list_topics().is_empty(),
+            "expected no topics to be listed after attempting to publish to a missing topic"
+        );
+        assert!(
+            !data_root.path().join("missing").exists(),
+            "expected the missing topic directory not to exist"
+        );
     }
 
     #[test]
@@ -291,9 +323,21 @@ mod tests {
             .publish(name, input)
             .expect("failed to publish to topic");
 
-        assert_eq!(result.topic(), name);
-        assert_eq!(result.partition(), 0);
-        assert_eq!(result.offset(), 0);
+        assert_eq!(
+            result.topic(),
+            name,
+            "expected the result to report the correct topic"
+        );
+        assert_eq!(
+            result.partition(),
+            0,
+            "expected the result to report the correct partition"
+        );
+        assert_eq!(
+            result.offset(),
+            0,
+            "expected the result to report the correct offset"
+        );
     }
 
     #[test]
@@ -313,7 +357,104 @@ mod tests {
             matches!(error, TopicError::NotFound { name } if name.as_str() == "missing"),
             "expected a not found error for the missing topic"
         );
-        assert!(broker.list_topics().is_empty());
-        assert!(!data_root.path().join("missing").exists());
+        assert!(
+            broker.list_topics().is_empty(),
+            "expected no topics to be listed"
+        );
+        assert!(
+            !data_root.path().join("missing").exists(),
+            "expected the missing topic directory not to exist"
+        );
+    }
+
+    #[test]
+    fn read_from_a_known_topic_returns_the_published_record() {
+        let topic = "orders";
+        let data_root = tempfile::tempdir().expect("failed to create temporary data root");
+        let mut broker = Broker::new(
+            data_root.path().to_path_buf(),
+            SegmentConfig::default(),
+            RecordLimits::default(),
+        );
+        let key0 = vec![0, 255];
+        let key1 = vec![0, 255];
+        let payload0 = vec![1, 0, 254];
+        let payload1 = vec![1, 0, 254];
+        let publish_input0 = PublishInput::new(Some(key0.clone()), payload0.clone());
+        let publish_input1 = PublishInput::new(Some(key1.clone()), payload1.clone());
+
+        broker
+            .create_topic(topic.to_string(), 1)
+            .expect("failed to create topic");
+
+        let publish_result0 = broker
+            .publish(topic, publish_input0)
+            .expect("failed to publish to topic");
+
+        let record0 = broker
+            .read(topic, 0, publish_result0.offset())
+            .expect("failed to read from topic")
+            .expect("expected a record to be returned");
+
+        assert_eq!(
+            record0.offset(),
+            publish_result0.offset(),
+            "expected the record to have the correct offset"
+        );
+        assert_eq!(
+            record0.key().expect("expected the record to have a key"),
+            key0,
+            "expected the record to have the correct key"
+        );
+        assert_eq!(
+            record0.payload(),
+            payload0,
+            "expected the record to have the correct payload"
+        );
+
+        let publish_result1 = broker
+            .publish(topic, publish_input1)
+            .expect("failed to publish to topic");
+
+        let record0 = broker
+            .read(topic, 0, publish_result0.offset())
+            .expect("failed to read from topic")
+            .expect("expected a record to be returned");
+        let record1 = broker
+            .read(topic, 0, publish_result1.offset())
+            .expect("failed to read from topic")
+            .expect("expected a record to be returned");
+
+        assert_eq!(
+            record0.offset(),
+            publish_result0.offset(),
+            "expected the record to have the correct offset"
+        );
+        assert_eq!(
+            record0.key().expect("expected the record to have a key"),
+            key0,
+            "expected the record to have the correct key"
+        );
+        assert_eq!(
+            record0.payload(),
+            payload0,
+            "expected the record to have the correct payload"
+        );
+
+        assert_eq!(
+            record1.offset(),
+            publish_result1.offset(),
+            "expected the record to have the correct offset"
+        );
+        assert_eq!(
+            record1.key().expect("expected the record to have a key"),
+            key1,
+            "expected the record to have the correct key"
+        );
+        assert_eq!(
+            record1.payload(),
+            payload1,
+            "expected the record to have the correct payload"
+        );
     }
 }
