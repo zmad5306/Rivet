@@ -315,6 +315,9 @@ pub enum TopicError {
     Partition {
         source: PartitionError,
     },
+    InvalidTopicName {
+        source: TopicNameError,
+    },
 }
 
 impl std::fmt::Display for TopicError {
@@ -365,6 +368,9 @@ impl std::fmt::Display for TopicError {
             TopicError::Partition { source } => {
                 write!(f, "partition error: {}", source)
             }
+            TopicError::InvalidTopicName { source } => {
+                write!(f, "invalid topic name: {}", source)
+            }
         }
     }
 }
@@ -381,6 +387,7 @@ impl std::error::Error for TopicError {
             TopicError::UnsupportedPartitionId { .. } => None,
             TopicError::UnsupportedPartitionCount { .. } => None,
             TopicError::Partition { source } => Some(source),
+            TopicError::InvalidTopicName { source } => Some(source),
         }
     }
 }
@@ -400,6 +407,12 @@ impl From<StorageError> for TopicError {
 impl From<PartitionError> for TopicError {
     fn from(source: PartitionError) -> Self {
         TopicError::Partition { source }
+    }
+}
+
+impl From<TopicNameError> for TopicError {
+    fn from(source: TopicNameError) -> Self {
+        TopicError::InvalidTopicName { source }
     }
 }
 
