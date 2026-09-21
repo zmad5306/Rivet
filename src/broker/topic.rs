@@ -77,6 +77,30 @@ impl Topic {
         let record = self.partition.read(offset)?;
         Ok(record)
     }
+
+    pub fn open(
+        data_root: &Path,
+        name: TopicName,
+        config: SegmentConfig,
+        limits: RecordLimits,
+    ) -> Result<Topic, TopicError> {
+        let topic_directory = data_root.join(name.as_str());
+        let partition_directory = topic_directory.join("0");
+
+        match std::fs::symlink_metadata(&partition_directory) {
+            Ok(_) => {}
+            Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
+                return Err(TopicError::MissingPartitionDirectory {
+                    path: partition_directory,
+                });
+            }
+            Err(source) => return Err(TopicError::Io { source }),
+        }
+
+        let partition = Partition::new(&partition_directory, config, limits)?;
+
+        Ok(Topic { name, partition })
+    }
 }
 
 pub(crate) fn validate_partition_id(requested: u32) -> Result<(), TopicError> {
@@ -98,7 +122,7 @@ mod tests {
 
     use crate::broker::topic::{Topic, TopicName};
     use crate::error::{TopicError, TopicNameError};
-    use crate::storage::record::RecordLimits;
+    use crate::storage::record::{PublishInput, RecordLimits};
     use crate::storage::segment::SegmentConfig;
 
     #[test]
@@ -126,6 +150,65 @@ mod tests {
         assert!(
             partition_zero_directory.is_dir(),
             "partition zero directory should exist"
+        );
+    }
+
+    #[test]
+    fn opening_an_existing_topic_restores_its_name_and_partition_zero_records() {
+        let orders = "orders";
+        let data_root = tempfile::tempdir().expect("failed to create temporary data root");
+        let topic_name = TopicName::new(orders.to_string()).expect("failed to create TopicName");
+        let key: Vec<u8> = vec![0, 255, 128];
+        let payload: Vec<u8> = vec![1, 0, 254, 127];
+        let publish_input = PublishInput::new(Some(key.clone()), payload.clone());
+        let mut topic = Topic::create(
+            data_root.path(),
+            topic_name,
+            SegmentConfig::default(),
+            RecordLimits::default(),
+        )
+        .expect("failed to create topic");
+        let offset = topic
+            .publish(publish_input)
+            .expect("failed to publish record");
+
+        drop(topic);
+
+        let reopened_topic_name =
+            TopicName::new(orders.to_string()).expect("failed to create TopicName");
+        let reopened_topic = Topic::open(
+            data_root.path(),
+            reopened_topic_name,
+            SegmentConfig::default(),
+            RecordLimits::default(),
+        )
+        .expect("failed to open topic");
+
+        assert_eq!(
+            reopened_topic.name().as_str(),
+            orders,
+            "reopened topic name should match the original name"
+        );
+
+        let record = reopened_topic
+            .read(0, offset)
+            .expect("failed to read record")
+            .expect("record should exist");
+
+        assert_eq!(
+            record.offset(),
+            offset,
+            "restored record should have the same offset"
+        );
+        assert_eq!(
+            record.key().expect("record should have a key"),
+            &key,
+            "restored record should have the same key"
+        );
+        assert_eq!(
+            record.payload(),
+            &payload,
+            "restored record should have the same payload"
         );
     }
 
