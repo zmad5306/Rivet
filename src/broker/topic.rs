@@ -213,6 +213,20 @@ mod tests {
     }
 
     #[test]
+    fn opening_a_topic_without_partition_zero_returns_an_error_without_creating_it() {
+        // TODO: Create a temporary data root and an "orders" directory inside it,
+        //       but deliberately do not create the expected "orders/0" partition
+        //       directory; construct the "orders" TopicName separately.
+        // TODO: Call Topic::open with default configuration and limits, requiring
+        //       an error rather than a Topic.
+        // TODO: Verify the error is TopicError::MissingPartitionDirectory whose
+        //       path equals the expected "orders/0" path.
+        // TODO: Verify the expected partition path still does not exist, proving
+        //       Topic::open did not silently initialize malformed on-disk state.
+        todo!()
+    }
+
+    #[test]
     fn duplicate_topic_creation_returns_already_exists() {
         let data_root = tempfile::tempdir().expect("failed to create temporary data root");
         let topic_name_str = "orders";
