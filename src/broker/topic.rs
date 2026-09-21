@@ -214,16 +214,30 @@ mod tests {
 
     #[test]
     fn opening_a_topic_without_partition_zero_returns_an_error_without_creating_it() {
-        // TODO: Create a temporary data root and an "orders" directory inside it,
-        //       but deliberately do not create the expected "orders/0" partition
-        //       directory; construct the "orders" TopicName separately.
-        // TODO: Call Topic::open with default configuration and limits, requiring
-        //       an error rather than a Topic.
-        // TODO: Verify the error is TopicError::MissingPartitionDirectory whose
-        //       path equals the expected "orders/0" path.
-        // TODO: Verify the expected partition path still does not exist, proving
-        //       Topic::open did not silently initialize malformed on-disk state.
-        todo!()
+        let data_root = tempfile::tempdir().expect("failed to create temporary data root");
+        let orders_directory = data_root.path().join("orders");
+        std::fs::create_dir(&orders_directory).expect("failed to create orders directory");
+        let partition_zero_directory = orders_directory.join("0");
+        assert!(
+            !partition_zero_directory.exists(),
+            "partition zero directory should not exist"
+        );
+        let topic_name = TopicName::new("orders".to_string()).expect("failed to create TopicName");
+        let error = Topic::open(
+            data_root.path(),
+            topic_name,
+            SegmentConfig::default(),
+            RecordLimits::default(),
+        )
+        .expect_err("expected error when opening topic without partition zero");
+
+        assert!(
+            matches!(error, TopicError::MissingPartitionDirectory { path } if path == partition_zero_directory)
+        );
+        assert!(
+            !partition_zero_directory.exists(),
+            "partition zero directory should still not exist"
+        );
     }
 
     #[test]
