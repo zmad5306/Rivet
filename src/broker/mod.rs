@@ -277,6 +277,66 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_topic_creation_preserves_the_original_catalog_entry_and_record() {
+        let orders = "orders";
+        let key = vec![0, 255];
+        let payload = vec![1, 0, 254];
+        let publish_input = PublishInput::new(Some(key.clone()), payload.clone());
+        let data_root = tempfile::tempdir().expect("failed to create temporary data root");
+        let mut broker = Broker::new(
+            data_root.path().to_path_buf(),
+            SegmentConfig::default(),
+            RecordLimits::default(),
+        );
+
+        broker
+            .create_topic(orders.to_string(), 1)
+            .expect("failed to create topic");
+
+        let publish_result = broker
+            .publish(orders, publish_input)
+            .expect("failed to publish the first record");
+
+        let error = broker
+            .create_topic(orders.to_string(), 1)
+            .expect_err("expected an already exists error");
+
+        assert!(
+            matches!(error, TopicError::AlreadyExists { name } if name.as_str() == "orders"),
+            "expected an already exists error"
+        );
+
+        let listed_topics = broker.list_topics();
+
+        assert_eq!(
+            listed_topics,
+            vec![orders.to_string()],
+            "expected the original 'orders' topic to still be listed"
+        );
+
+        let record = broker
+            .read(orders, publish_result.partition(), publish_result.offset())
+            .expect("failed to read the original record")
+            .expect("expected the original record to exist");
+
+        assert_eq!(
+            record.offset(),
+            publish_result.offset(),
+            "expected the record offset to remain unchanged"
+        );
+        assert_eq!(
+            record.key().expect("expected the record key to exist"),
+            key,
+            "expected the record key to remain unchanged"
+        );
+        assert_eq!(
+            record.payload(),
+            payload,
+            "expected the record payload to remain unchanged"
+        );
+    }
+
+    #[test]
     fn publish_to_a_missing_topic_returns_not_found_without_creating_state() {
         let data_root = tempfile::tempdir().expect("failed to create temporary data root");
         let mut broker = Broker::new(
