@@ -474,17 +474,93 @@ mod tests {
 
     #[test]
     fn repeated_reopening_preserves_an_empty_topic_and_its_first_offset() {
-        // TODO: Create a temporary data root, open a mutable Broker with default configuration,
-        //       and create an "orders" topic without publishing any records.
-        // TODO: Drop the Broker, reopen the same data root, and verify the catalog still lists
-        //       exactly "orders" while reading partition 0 at offset 0 returns None.
-        // TODO: Drop the reopened Broker without writing, then reopen the same root a second time.
-        // TODO: Verify the second reopened Broker still lists exactly "orders" and still returns
-        //       None for partition 0 at offset 0.
-        // TODO: Publish one binary record after the second restart and verify it receives offset 0;
-        //       read it back through Broker::read to prove repeated empty restarts did not create a
-        //       phantom record or advance the partition's recovered next offset.
-        todo!()
+        let orders = "orders";
+        let data_root = tempfile::tempdir().expect("failed to create temporary data root");
+        let mut broker = Broker::open(
+            data_root.path().to_path_buf(),
+            SegmentConfig::default(),
+            RecordLimits::default(),
+        )
+        .expect("failed to open broker");
+        broker
+            .create_topic(orders.to_string(), 1)
+            .expect("failed to create orders topic");
+
+        drop(broker);
+
+        let broker = Broker::open(
+            data_root.path().to_path_buf(),
+            SegmentConfig::default(),
+            RecordLimits::default(),
+        )
+        .expect("failed to reopen broker");
+
+        assert_eq!(
+            broker.list_topics(),
+            vec![orders.to_string()],
+            "expected the reopened broker to list exactly the 'orders' topic"
+        );
+        assert!(
+            broker
+                .read(orders, 0, 0)
+                .expect("expected to read partition 0 at offset 0 after the first reopen")
+                .is_none(),
+            "expected reading partition 0 at offset 0 to return None"
+        );
+
+        drop(broker);
+
+        let mut broker = Broker::open(
+            data_root.path().to_path_buf(),
+            SegmentConfig::default(),
+            RecordLimits::default(),
+        )
+        .expect("failed to reopen broker");
+
+        assert_eq!(
+            broker.list_topics(),
+            vec![orders.to_string()],
+            "expected the second reopened broker to list exactly the 'orders' topic"
+        );
+        assert!(
+            broker
+                .read(orders, 0, 0)
+                .expect("expected to read partition 0 at offset 0 after the second reopen")
+                .is_none(),
+            "expected reading partition 0 at offset 0 to return None after the second reopen"
+        );
+
+        let order1_key = b"order1".to_vec();
+        let order1_payload = b"order1_payload".to_vec();
+        let order1_input = PublishInput::new(Some(order1_key.clone()), order1_payload.clone());
+
+        let order1_result = broker
+            .publish(orders, order1_input)
+            .expect("failed to publish order1");
+
+        assert_eq!(
+            order1_result.offset(),
+            0,
+            "expected the first published order to have offset 0"
+        );
+
+        let order1_record = broker
+            .read(orders, 0, 0)
+            .expect("expected to read the first published order")
+            .expect("expected a record at offset 0");
+
+        assert_eq!(
+            order1_record
+                .key()
+                .expect("expected a key for the first published order"),
+            order1_key
+        );
+        assert_eq!(order1_record.payload(), &order1_payload);
+        assert_eq!(
+            order1_record.offset(),
+            0,
+            "expected the first published order to have offset 0"
+        );
     }
 
     #[test]
