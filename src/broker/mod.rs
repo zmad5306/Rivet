@@ -298,6 +298,196 @@ mod tests {
     }
 
     #[test]
+    fn reopening_a_broker_restores_multiple_topics_and_continues_independent_offsets() {
+        let orders = "orders";
+        let payments = "payments";
+        let order1_key = b"order1_key".to_vec();
+        let order2_key = b"order2_key".to_vec();
+        let order3_key = b"order3_key".to_vec();
+        let payment1_key = b"payment1_key".to_vec();
+        let payment2_key = b"payment2_key".to_vec();
+        let order1_payload = b"order1_payload".to_vec();
+        let order2_payload = b"order2_payload".to_vec();
+        let order3_payload = b"order3_payload".to_vec();
+        let payment1_payload = b"payment1_payload".to_vec();
+        let payment2_payload = b"payment2_payload".to_vec();
+        let order1_input = PublishInput::new(Some(order1_key.clone()), order1_payload.clone());
+        let order2_input = PublishInput::new(Some(order2_key.clone()), order2_payload.clone());
+        let order3_input = PublishInput::new(Some(order3_key.clone()), order3_payload.clone());
+        let payment1_input =
+            PublishInput::new(Some(payment1_key.clone()), payment1_payload.clone());
+        let payment2_input =
+            PublishInput::new(Some(payment2_key.clone()), payment2_payload.clone());
+        let data_root = tempfile::tempdir().expect("failed to create temporary data root");
+        let mut broker = Broker::open(
+            data_root.path().to_path_buf(),
+            SegmentConfig::default(),
+            RecordLimits::default(),
+        )
+        .expect("failed to open broker");
+
+        broker
+            .create_topic(orders.to_string(), 1)
+            .expect("failed to create 'orders' topic");
+        broker
+            .create_topic(payments.to_string(), 1)
+            .expect("failed to create 'payments' topic");
+
+        let order1_result = broker
+            .publish(orders, order1_input)
+            .expect("failed to publish order1");
+        let order2_result = broker
+            .publish(orders, order2_input)
+            .expect("failed to publish order2");
+        let payment1_result = broker
+            .publish(payments, payment1_input)
+            .expect("failed to publish payment1");
+
+        assert_eq!(order1_result.offset(), 0, "order1 offset should be 0");
+        assert_eq!(order2_result.offset(), 1, "order2 offset should be 1");
+        assert_eq!(payment1_result.offset(), 0, "payment1 offset should be 0");
+
+        drop(broker);
+
+        let mut broker = Broker::open(
+            data_root.path().to_path_buf(),
+            SegmentConfig::default(),
+            RecordLimits::default(),
+        )
+        .expect("failed to reopen broker");
+
+        let topics = broker.list_topics();
+        assert_eq!(topics, vec![orders.to_string(), payments.to_string()]);
+
+        let order1_record = broker
+            .read(orders, 0, 0)
+            .expect("failed to read order1 record")
+            .expect("expected order1 record to exist");
+        let order2_record = broker
+            .read(orders, 0, 1)
+            .expect("failed to read order2 record")
+            .expect("expected order2 record to exist");
+        let payment1_record = broker
+            .read(payments, 0, 0)
+            .expect("failed to read payment1 record")
+            .expect("expected payment1 record to exist");
+
+        assert_eq!(
+            order1_record.key().expect("failed to get order1 key"),
+            order1_key,
+            "order1 key mismatch"
+        );
+        assert_eq!(
+            order1_record.payload(),
+            order1_payload,
+            "order1 payload mismatch"
+        );
+        assert_eq!(
+            order1_record.offset(),
+            order1_result.offset(),
+            "order1 offset mismatch"
+        );
+
+        assert_eq!(
+            order2_record.key().expect("failed to get order2 key"),
+            order2_key,
+            "order2 key mismatch"
+        );
+        assert_eq!(
+            order2_record.payload(),
+            order2_payload,
+            "order2 payload mismatch"
+        );
+        assert_eq!(
+            order2_record.offset(),
+            order2_result.offset(),
+            "order2 offset mismatch"
+        );
+
+        assert_eq!(
+            payment1_record.key().expect("failed to get payment1 key"),
+            payment1_key,
+            "payment1 key mismatch"
+        );
+        assert_eq!(
+            payment1_record.payload(),
+            payment1_payload,
+            "payment1 payload mismatch"
+        );
+        assert_eq!(
+            payment1_record.offset(),
+            payment1_result.offset(),
+            "payment1 offset mismatch"
+        );
+
+        let order3_result = broker
+            .publish(orders, order3_input)
+            .expect("failed to publish order3");
+        let payment2_result = broker
+            .publish(payments, payment2_input)
+            .expect("failed to publish payment2");
+
+        assert_eq!(order3_result.offset(), 2, "order3 offset should be 2");
+        assert_eq!(payment2_result.offset(), 1, "payment2 offset should be 1");
+
+        let order3_record = broker
+            .read(orders, 0, 2)
+            .expect("failed to read order3 record")
+            .expect("expected order3 record to exist");
+        let payment2_record = broker
+            .read(payments, 0, 1)
+            .expect("failed to read payment2 record")
+            .expect("expected payment2 record to exist");
+
+        assert_eq!(
+            order3_record.key().expect("failed to get order3 key"),
+            order3_key,
+            "order3 key mismatch"
+        );
+        assert_eq!(
+            order3_record.payload(),
+            order3_payload,
+            "order3 payload mismatch"
+        );
+        assert_eq!(
+            order3_record.offset(),
+            order3_result.offset(),
+            "order3 offset mismatch"
+        );
+
+        assert_eq!(
+            payment2_record.key().expect("failed to get payment2 key"),
+            payment2_key,
+            "payment2 key mismatch"
+        );
+        assert_eq!(
+            payment2_record.payload(),
+            payment2_payload,
+            "payment2 payload mismatch"
+        );
+        assert_eq!(
+            payment2_record.offset(),
+            payment2_result.offset(),
+            "payment2 offset mismatch"
+        );
+    }
+
+    #[test]
+    fn repeated_reopening_preserves_an_empty_topic_and_its_first_offset() {
+        // TODO: Create a temporary data root, open a mutable Broker with default configuration,
+        //       and create an "orders" topic without publishing any records.
+        // TODO: Drop the Broker, reopen the same data root, and verify the catalog still lists
+        //       exactly "orders" while reading partition 0 at offset 0 returns None.
+        // TODO: Drop the reopened Broker without writing, then reopen the same root a second time.
+        // TODO: Verify the second reopened Broker still lists exactly "orders" and still returns
+        //       None for partition 0 at offset 0.
+        // TODO: Publish one binary record after the second restart and verify it receives offset 0;
+        //       read it back through Broker::read to prove repeated empty restarts did not create a
+        //       phantom record or advance the partition's recovered next offset.
+        todo!()
+    }
+
+    #[test]
     fn create_topic_rejects_an_invalid_raw_name_before_mutating_state() {
         let data_root = tempfile::tempdir().expect("failed to create temporary data root");
         let mut broker = Broker::open(
