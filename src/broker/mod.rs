@@ -154,7 +154,7 @@ mod tests {
     use std::error::Error;
 
     use crate::broker::Broker;
-    use crate::error::{TopicError, TopicNameError};
+    use crate::error::{CatalogEntryErrorReason, TopicError, TopicNameError};
     use crate::storage::record::{PublishInput, RecordLimits};
     use crate::storage::segment::SegmentConfig;
 
@@ -1051,6 +1051,84 @@ mod tests {
         assert!(
             payment_1_none.is_none(),
             "expected no second payment record"
+        );
+    }
+
+    #[test]
+    fn opening_a_broker_with_a_regular_file_child_rejects_the_catalog_without_overwriting_entries()
+    {
+        let empty = "empty";
+        let data_root = tempfile::tempdir().expect("failed to create temporary data root");
+        let mut broker = Broker::open(
+            data_root.path().to_path_buf(),
+            SegmentConfig::default(),
+            RecordLimits::default(),
+        )
+        .expect("failed to create broker");
+
+        broker
+            .create_topic(empty.to_string(), 1)
+            .expect("failed to create topic");
+
+        assert!(
+            data_root.path().join(empty).join("0").exists(),
+            "expected the valid topic's partition-0 directory to still exist"
+        );
+
+        drop(broker);
+
+        let malformed_path = data_root.path().join("malformed");
+        let sentinel = b"sentinel";
+
+        std::fs::write(&malformed_path, sentinel).expect("failed to write malformed file");
+
+        let error = Broker::open(
+            data_root.path().to_path_buf(),
+            SegmentConfig::default(),
+            RecordLimits::default(),
+        )
+        .expect_err("expected an error due to malformed catalog entry");
+
+        assert!(
+            matches!(error, TopicError::UnexpectedCatalogEntry { path, reason: CatalogEntryErrorReason::NotDirectory } if path == malformed_path)
+        );
+        assert!(
+            data_root.path().join(empty).join("0").exists(),
+            "expected the valid topic's partition-0 directory to still exist"
+        );
+
+        let contents = std::fs::read(&malformed_path).expect("failed to read malformed file");
+        assert_eq!(
+            contents, sentinel,
+            "expected the malformed file to still contain the sentinel bytes"
+        );
+    }
+
+    #[test]
+    fn opening_a_broker_with_an_invalid_topic_directory_name_rejects_the_catalog() {
+        let data_root = tempfile::tempdir().expect("failed to create temporary data root");
+        let bad_name_path = data_root.path().join("bad.name");
+        let partition_0_path = bad_name_path.join("0");
+
+        std::fs::create_dir_all(&partition_0_path).expect("failed to create bad topic directory");
+
+        let error = Broker::open(
+            data_root.path().to_path_buf(),
+            SegmentConfig::default(),
+            RecordLimits::default(),
+        )
+        .expect_err("expected an error due to invalid topic directory name");
+
+        assert!(
+            matches!(error, TopicError::UnexpectedCatalogEntry { path, reason: CatalogEntryErrorReason::InvalidTopicName } if path == bad_name_path)
+        );
+        assert!(
+            bad_name_path.exists(),
+            "expected the malformed directory to still exist"
+        );
+        assert!(
+            partition_0_path.exists(),
+            "expected the partition-0 directory inside the malformed directory to still exist"
         );
     }
 }
