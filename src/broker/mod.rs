@@ -1165,7 +1165,6 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn opening_a_broker_with_a_topic_symlink_rejects_the_catalog_without_following_it() {
         let data_root = tempfile::tempdir().expect("failed to create temporary data root");
@@ -1173,7 +1172,21 @@ mod tests {
         let partition_0_path = target.path().join("0");
         std::fs::create_dir_all(&partition_0_path).expect("failed to create partition 0 in target");
         let symlink_path = data_root.path().join("orders");
+
+        #[cfg(unix)]
         std::os::unix::fs::symlink(target.path(), &symlink_path).expect("failed to create symlink");
+
+        #[cfg(windows)]
+        match std::os::windows::fs::symlink_dir(target.path(), &symlink_path) {
+            Ok(_) => {}
+            Err(error) => {
+                if error.kind() == std::io::ErrorKind::PermissionDenied {
+                    return;
+                } else {
+                    panic!("unexpected error creating symlink: {:?}", error);
+                }
+            }
+        }
 
         let error = Broker::open(
             data_root.path().to_path_buf(),
