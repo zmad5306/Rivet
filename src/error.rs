@@ -277,6 +277,38 @@ impl std::error::Error for TopicNameError {
 }
 
 #[derive(Debug, PartialEq, Eq)]
+pub enum ConsumerGroupNameError {
+    InvalidLength { actual: usize },
+    InvalidCharacter { character: char },
+}
+
+impl std::fmt::Display for ConsumerGroupNameError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ConsumerGroupNameError::InvalidLength { actual } => write!(
+                f,
+                "invalid consumer group name length: {}, 1 to 128 bytes allowed",
+                actual
+            ),
+            ConsumerGroupNameError::InvalidCharacter { character } => write!(
+                f,
+                "invalid character '{}' in consumer group name, only ASCII letters, digits, - and _ allowed.",
+                character
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ConsumerGroupNameError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            ConsumerGroupNameError::InvalidLength { .. } => None,
+            ConsumerGroupNameError::InvalidCharacter { .. } => None,
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
 pub enum CatalogEntryErrorReason {
     InvalidTopicName,
     NotDirectory,
@@ -828,12 +860,25 @@ mod tests {
         let config = super::ConfigurationError::InvalidSegmentBytes { value: 0 };
         assert!(config.to_string().contains('0'));
         assert!(config.source().is_none());
+
         let length = super::TopicNameError::InvalidLength { actual: 129 };
         assert!(length.to_string().contains("129"));
         assert!(length.source().is_none());
+
         let character = super::TopicNameError::InvalidCharacter { character: '/' };
         assert!(character.to_string().contains('/'));
         assert!(character.source().is_none());
+    }
+
+    #[test]
+    fn consumer_group_name_diagnostics_retain_rejected_values_without_sources() {
+        let length_error = super::ConsumerGroupNameError::InvalidLength { actual: 129 };
+        assert!(length_error.to_string().contains("129"));
+        assert!(length_error.source().is_none());
+
+        let character_error = super::ConsumerGroupNameError::InvalidCharacter { character: '/' };
+        assert!(character_error.to_string().contains("/"));
+        assert!(character_error.source().is_none());
     }
 
     #[test]
