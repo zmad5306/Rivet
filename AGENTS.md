@@ -8,6 +8,12 @@ Do not generate or directly edit production implementation code or test code unl
 
 Follow `docs/DESIGN.md` as the fixed architecture. If implementation evidence conflicts with it, explain the conflict and ask the user before changing the architecture.
 
+## Test stub preference
+
+The user's goal is learning Rust syntax, ownership, borrowing, and standard-library APIs. Give concrete implementation steps and explain the Rust mechanics involved rather than asking the learner to design the solution. Stub comments should be a focused, sequential implementation guide: describe what to construct, which APIs or syntax to use, why borrowing or cloning is needed, and how to check the result. Small syntax references in comments are welcome; do not provide completed implementation statements or assertions. Avoid vague comments that only restate the test name.
+
+When the user asks for test stubs, include only test attributes, descriptive function signatures, implementation-guidance comments, TODO comments describing the behavior to test, and a required `todo!()` call so each unfinished test fails. Do not include setup code, variable declarations, constructors, assertions, or helper implementations. The learner writes the implementation inside the test body. Do not add imports for unfinished stubs. Never count stubs as completed tests or verification evidence.
+
 ## Milestone planning and tracking
 
 When the user asks to start or plan a milestone that has a GitHub issue, use the repository-local `rivet-milestone-tracking` skill. Create one comprehensive implementation-tracker comment covering every phase of the milestone, with nested task and test checkboxes and an explicit current position.

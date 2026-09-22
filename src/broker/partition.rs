@@ -1,98 +1,103 @@
+use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::error::PartitionError;
-use crate::storage::record::{PublishInput, Record};
+use crate::storage::record::{PublishInput, Record, RecordLimits};
+use crate::storage::segment::{SegmentConfig, SegmentedLog};
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct Partition {
-    records: Vec<Record>,
-    next_offset: Option<u64>,
+    segmented_log: SegmentedLog,
 }
 
 impl Partition {
-    pub fn new() -> Self {
-        Self {
-            records: Vec::new(),
-            next_offset: Some(0),
-        }
+    pub fn new(
+        directory: &Path,
+        config: SegmentConfig,
+        limits: RecordLimits,
+    ) -> Result<Self, PartitionError> {
+        let segmented_log = SegmentedLog::open(directory, limits, config)?;
+        Ok(Self { segmented_log })
     }
 
-    pub fn read(&self, offset: u64) -> Option<&Record> {
-        match usize::try_from(offset) {
-            Ok(index) => self.records.get(index),
-            Err(_) => None,
-        }
+    pub fn read(&self, offset: u64) -> Result<Option<Record>, PartitionError> {
+        Ok(self.segmented_log.read(offset)?)
     }
 
     pub fn publish(&mut self, input: PublishInput) -> Result<u64, PartitionError> {
-        let offset = match self.next_offset {
-            Some(offset) => offset,
-            None => return Err(PartitionError::OffsetOverflow),
-        };
         let timestamp = match SystemTime::now().duration_since(UNIX_EPOCH) {
             Ok(duration) => duration.as_secs(),
             Err(_) => return Err(PartitionError::ClockBeforeEpoch),
         };
         let (key, payload) = input.into_parts();
+        let offset = self.segmented_log.next_offset();
         let record = Record::new(offset, timestamp, key, payload);
 
-        self.records.push(record);
-
-        if offset == u64::MAX {
-            self.next_offset = None;
-        } else {
-            self.next_offset = Some(offset + 1);
-        }
+        self.segmented_log.append(&record)?;
 
         Ok(offset)
-    }
-}
-
-impl Default for Partition {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use crate::broker::partition::Partition;
-    use crate::error::PartitionError;
+    use crate::error::{CodecError, PartitionError, StorageError};
     use crate::storage::record::PublishInput;
+    use crate::storage::record::RecordLimits;
+    use crate::storage::segment::SegmentConfig;
 
     #[test]
     fn first_publish_returns_offset_zero() {
-        let mut partition = Partition::new();
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let dir_path = dir.path();
+        let config = SegmentConfig::default();
+        let limits = RecordLimits::default();
+
+        let mut partition =
+            Partition::new(dir_path, config, limits).expect("failed to create partition");
         let key: Option<Vec<u8>> = Some(vec![10, 20, 30]);
         let payload: Vec<u8> = vec![1, 2, 3];
         let input = PublishInput::new(key, payload);
 
-        let result = partition.publish(input);
+        let result = partition.publish(input).expect("failed to publish record");
 
-        assert_eq!(result, Ok(0), "publish should assign offset 0");
+        assert_eq!(result, 0, "publish should assign offset 0");
     }
 
     #[test]
     fn consecutive_publishes_return_consecutive_offsets() {
-        let mut partition = Partition::new();
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let dir_path = dir.path();
+        let config = SegmentConfig::default();
+        let limits = RecordLimits::default();
+
+        let mut partition =
+            Partition::new(dir_path, config, limits).expect("failed to create partition");
         let key: Option<Vec<u8>> = Some(vec![10, 20, 30]);
         let payload: Vec<u8> = vec![1, 2, 3];
         let input1 = PublishInput::new(key.clone(), payload.clone());
         let input2 = PublishInput::new(key.clone(), payload.clone());
         let input3 = PublishInput::new(key, payload);
 
-        let result1 = partition.publish(input1);
-        let result2 = partition.publish(input2);
-        let result3 = partition.publish(input3);
+        let result1 = partition.publish(input1).expect("failed to publish record");
+        let result2 = partition.publish(input2).expect("failed to publish record");
+        let result3 = partition.publish(input3).expect("failed to publish record");
 
-        assert_eq!(result1, Ok(0), "publish should assign offset 0");
-        assert_eq!(result2, Ok(1), "publish should assign offset 1");
-        assert_eq!(result3, Ok(2), "publish should assign offset 2");
+        assert_eq!(result1, 0, "publish should assign offset 0");
+        assert_eq!(result2, 1, "publish should assign offset 1");
+        assert_eq!(result3, 2, "publish should assign offset 2");
     }
 
     #[test]
     fn read_returns_the_record_at_each_assigned_offset() {
-        let mut partition = Partition::new();
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let dir_path = dir.path();
+        let config = SegmentConfig::default();
+        let limits = RecordLimits::default();
+
+        let mut partition =
+            Partition::new(dir_path, config, limits).expect("failed to create partition");
         let key1: Option<Vec<u8>> = Some(vec![10, 20, 30]);
         let key2: Option<Vec<u8>> = Some(vec![20, 30, 40]);
         let key3: Option<Vec<u8>> = Some(vec![30, 40, 50]);
@@ -103,17 +108,26 @@ mod tests {
         let input2 = PublishInput::new(key2, payload2);
         let input3 = PublishInput::new(key3, payload3);
 
-        let result1 = partition.publish(input1);
-        let result2 = partition.publish(input2);
-        let result3 = partition.publish(input3);
+        let result1 = partition.publish(input1).expect("failed to publish record");
+        let result2 = partition.publish(input2).expect("failed to publish record");
+        let result3 = partition.publish(input3).expect("failed to publish record");
 
-        assert_eq!(result1, Ok(0), "publish should assign offset 0");
-        assert_eq!(result2, Ok(1), "publish should assign offset 1");
-        assert_eq!(result3, Ok(2), "publish should assign offset 2");
+        assert_eq!(result1, 0, "publish should assign offset 0");
+        assert_eq!(result2, 1, "publish should assign offset 1");
+        assert_eq!(result3, 2, "publish should assign offset 2");
 
-        let record1 = partition.read(0).expect("record at offset 0 should exist");
-        let record2 = partition.read(1).expect("record at offset 1 should exist");
-        let record3 = partition.read(2).expect("record at offset 2 should exist");
+        let record1 = partition
+            .read(0)
+            .expect("record at offset 0 should exist")
+            .expect("record at offset 0 should exist");
+        let record2 = partition
+            .read(1)
+            .expect("record at offset 1 should exist")
+            .expect("record at offset 1 should exist");
+        let record3 = partition
+            .read(2)
+            .expect("record at offset 2 should exist")
+            .expect("record at offset 2 should exist");
 
         assert_eq!(
             record1.offset(),
@@ -164,44 +178,65 @@ mod tests {
 
     #[test]
     fn read_from_empty_partition_returns_none() {
-        let partition = Partition::new();
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let dir_path = dir.path();
+        let config = SegmentConfig::default();
+        let limits = RecordLimits::default();
 
-        let result = partition.read(0);
+        let partition =
+            Partition::new(dir_path, config, limits).expect("failed to create partition");
+
+        let result_none = partition.read(0).expect("failed to read from partition");
 
         assert!(
-            result.is_none(),
+            result_none.is_none(),
             "reading an unavailable offset should return None"
         );
     }
 
     #[test]
     fn read_beyond_last_offset_returns_none() {
-        let mut partition = Partition::new();
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let dir_path = dir.path();
+        let config = SegmentConfig::default();
+        let limits = RecordLimits::default();
+
+        let mut partition =
+            Partition::new(dir_path, config, limits).expect("failed to create partition");
         let key: Option<Vec<u8>> = Some(vec![10, 20, 30]);
         let payload: Vec<u8> = vec![1, 2, 3];
         let input = PublishInput::new(key, payload);
 
-        let result = partition.publish(input);
-        let record = partition.read(42);
+        let offset = partition.publish(input).expect("failed to publish record");
+        let record_none = partition.read(42).expect("failed to read from partition");
 
-        assert_eq!(result, Ok(0), "publish should assign offset 0");
+        assert_eq!(offset, 0, "publish should assign offset 0");
         assert!(
-            record.is_none(),
+            record_none.is_none(),
             "reading an unavailable offset should return None"
         );
     }
 
     #[test]
     fn publish_and_read_preserve_binary_key_and_payload() {
-        let mut partition = Partition::new();
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let dir_path = dir.path();
+        let config = SegmentConfig::default();
+        let limits = RecordLimits::default();
+
+        let mut partition =
+            Partition::new(dir_path, config, limits).expect("failed to create partition");
         let key: Option<Vec<u8>> = Some(vec![0xFF, 0x00, 0x80]);
         let payload: Vec<u8> = vec![0xFE, 0x00, 0x81];
         let input = PublishInput::new(key, payload);
 
-        let result = partition.publish(input);
-        let record = partition.read(0).expect("record at offset 0 should exist");
+        let offset = partition.publish(input).expect("failed to publish record");
+        let record = partition
+            .read(0)
+            .expect("record at offset 0 should exist")
+            .expect("record at offset 0 should not be None");
 
-        assert_eq!(result, Ok(0), "publish should assign offset 0");
+        assert_eq!(offset, 0, "publish should assign offset 0");
         assert_eq!(
             record.key(),
             Some(&[0xFF, 0x00, 0x80][..]),
@@ -216,21 +251,33 @@ mod tests {
 
     #[test]
     fn publish_and_read_preserve_absent_and_empty_keys() {
-        let mut partition = Partition::new();
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let dir_path = dir.path();
+        let config = SegmentConfig::default();
+        let limits = RecordLimits::default();
+
+        let mut partition =
+            Partition::new(dir_path, config, limits).expect("failed to create partition");
         let key1: Option<Vec<u8>> = None;
         let key2: Option<Vec<u8>> = Some(vec![]);
         let payload: Vec<u8> = vec![1, 2, 3];
         let input1 = PublishInput::new(key1, payload.clone());
         let input2 = PublishInput::new(key2, payload);
 
-        let result1 = partition.publish(input1);
-        let result2 = partition.publish(input2);
+        let result1 = partition.publish(input1).expect("failed to publish input1");
+        let result2 = partition.publish(input2).expect("failed to publish input2");
 
-        assert_eq!(result1, Ok(0), "publish should assign offset 0");
-        assert_eq!(result2, Ok(1), "publish should assign offset 1");
+        assert_eq!(result1, 0, "publish should assign offset 0");
+        assert_eq!(result2, 1, "publish should assign offset 1");
 
-        let record1 = partition.read(0).expect("record at offset 0 should exist");
-        let record2 = partition.read(1).expect("record at offset 1 should exist");
+        let record1 = partition
+            .read(0)
+            .expect("record at offset 0 should exist")
+            .expect("record at offset 0 should not be None");
+        let record2 = partition
+            .read(1)
+            .expect("record at offset 1 should exist")
+            .expect("record at offset 1 should not be None");
 
         assert_eq!(
             record1.key(),
@@ -246,16 +293,25 @@ mod tests {
 
     #[test]
     fn publish_and_read_preserve_empty_payload() {
-        let mut partition = Partition::new();
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let dir_path = dir.path();
+        let config = SegmentConfig::default();
+        let limits = RecordLimits::default();
+
+        let mut partition =
+            Partition::new(dir_path, config, limits).expect("failed to create partition");
         let key: Option<Vec<u8>> = Some(vec![10, 20, 30]);
         let payload: Vec<u8> = vec![];
         let input = PublishInput::new(key, payload);
 
-        let result = partition.publish(input);
+        let offset = partition.publish(input).expect("failed to publish input");
 
-        assert_eq!(result, Ok(0), "publish should assign offset 0");
+        assert_eq!(offset, 0, "publish should assign offset 0");
 
-        let record = partition.read(0).expect("record at offset 0 should exist");
+        let record = partition
+            .read(0)
+            .expect("record at offset 0 should exist")
+            .expect("record at offset 0 should not be None");
 
         assert!(
             record.payload().is_empty(),
@@ -265,26 +321,42 @@ mod tests {
 
     #[test]
     fn later_publishes_leave_existing_records_unchanged() {
-        let mut partition = Partition::new();
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let dir_path = dir.path();
+        let config = SegmentConfig::default();
+        let limits = RecordLimits::default();
+
+        let mut partition =
+            Partition::new(dir_path, config, limits).expect("failed to create partition");
         let key: Option<Vec<u8>> = Some(vec![10, 20, 30]);
         let payload: Vec<u8> = vec![1, 2, 3];
         let input1 = PublishInput::new(key.clone(), payload.clone());
         let input2 = PublishInput::new(key, payload);
 
-        let result1 = partition.publish(input1);
+        let offset1 = partition
+            .publish(input1)
+            .expect("publish should assign offset 0");
 
-        let record1_before = partition.read(0).expect("record at offset 0 should exist");
+        let record1_before = partition
+            .read(0)
+            .expect("record at offset 0 should exist")
+            .expect("record at offset 0 should exist");
         let recorded_key = record1_before.key().map(|bytes| bytes.to_vec());
         let recorded_offset = record1_before.offset();
         let recorded_payload = record1_before.payload().to_vec();
         let recorded_timestamp = record1_before.timestamp();
 
-        let result2 = partition.publish(input2);
+        let offset2 = partition
+            .publish(input2)
+            .expect("publish should assign offset 1");
 
-        let record1_after = partition.read(0).expect("record at offset 0 should exist");
+        let record1_after = partition
+            .read(0)
+            .expect("record at offset 0 should exist")
+            .expect("record at offset 0 should exist");
 
-        assert_eq!(result1, Ok(0), "publish should assign offset 0");
-        assert_eq!(result2, Ok(1), "publish should assign offset 1");
+        assert_eq!(offset1, 0, "publish should assign offset 0");
+        assert_eq!(offset2, 1, "publish should assign offset 1");
 
         assert_eq!(
             record1_after.key(),
@@ -309,81 +381,152 @@ mod tests {
     }
 
     #[test]
-    fn publish_at_offset_limit_returns_overflow_without_changing_state() {
-        let mut partition = Partition::new();
-        partition.next_offset = Some(u64::MAX);
-        let key: Option<Vec<u8>> = Some(vec![10, 20, 30]);
-        let payload: Vec<u8> = vec![1, 2, 3];
-        let input1 = PublishInput::new(key.clone(), payload.clone());
-        let input2 = PublishInput::new(key, payload);
+    fn reopening_partition_preserves_records_and_continues_offsets() {
+        let dir = tempfile::tempdir().expect("failed to create temporary directory");
+        let dir_path = dir.path();
+        let config = SegmentConfig::default();
+        let limits = RecordLimits::default();
+        let input0 = PublishInput::new(None, vec![0; 3]);
+        let input1 = PublishInput::new(None, vec![1; 3]);
+        let input2 = PublishInput::new(None, vec![2; 3]);
+        let mut partition =
+            Partition::new(dir_path, config, limits).expect("failed to create partition");
+        let offset0 = partition
+            .publish(input0)
+            .expect("publish should assign offset 0");
+        let offset1 = partition
+            .publish(input1)
+            .expect("publish should assign offset 1");
 
-        let result1 = partition.publish(input1);
+        assert_eq!(offset0, 0, "publish should assign offset 0");
+        assert_eq!(offset1, 1, "publish should assign offset 1");
 
-        assert_eq!(
-            result1,
-            Ok(u64::MAX),
-            "publish should assign offset u64::MAX"
+        let record0_some = partition.read(0).expect("record at offset 0 should exist");
+        let record1_some = partition.read(1).expect("record at offset 1 should exist");
+        let record2_none = partition
+            .read(2)
+            .expect("record at offset 2 should not exist");
+
+        assert!(record0_some.is_some(), "record at offset 0 should exist");
+        assert!(record1_some.is_some(), "record at offset 1 should exist");
+        assert!(
+            record2_none.is_none(),
+            "record at offset 2 should not exist"
         );
-        assert_eq!(
-            partition.next_offset, None,
-            "offset exhaustion should leave no next offset available"
-        );
 
-        let record_before = partition
-            .records
-            .first()
+        let record0 = record0_some.expect("record at offset 0 should exist");
+        let record1 = record1_some.expect("record at offset 1 should exist");
+
+        drop(partition);
+
+        let mut partition =
+            Partition::new(dir_path, config, limits).expect("failed to reopen partition");
+
+        let record0_after = partition
+            .read(0)
+            .expect("record at offset 0 should exist")
             .expect("record at offset 0 should exist");
-        let recorded_key = record_before.key().map(|bytes| bytes.to_vec());
-        let recorded_offset = record_before.offset();
-        let recorded_payload = record_before.payload().to_vec();
-        let recorded_timestamp = record_before.timestamp();
-
-        let result2 = partition.publish(input2);
+        let record1_after = partition
+            .read(1)
+            .expect("record at offset 1 should exist")
+            .expect("record at offset 1 should exist");
 
         assert_eq!(
-            result2,
-            Err(PartitionError::OffsetOverflow),
-            "publish at offset limit returns overflow without changing state: expected OffsetOverflow"
+            record0, record0_after,
+            "record at offset 0 should be preserved after reopening"
         );
         assert_eq!(
-            partition.next_offset, None,
-            "offset exhaustion should leave no next offset available"
-        );
-        assert_eq!(
-            recorded_offset,
-            u64::MAX,
-            "final successful publish should use the maximum offset"
+            record1, record1_after,
+            "record at offset 1 should be preserved after reopening"
         );
 
-        let record_after = partition
-            .records
-            .first()
+        let offset2 = partition
+            .publish(input2)
+            .expect("publish should assign offset 2");
+
+        assert_eq!(offset2, 2, "publish should assign offset 2");
+
+        let record0_after_reopen = partition
+            .read(0)
+            .expect("record at offset 0 should exist")
             .expect("record at offset 0 should exist");
+        let record1_after_reopen = partition
+            .read(1)
+            .expect("record at offset 1 should exist")
+            .expect("record at offset 1 should exist");
+        let record2_after = partition.read(2).expect("record at offset 2 should exist");
 
         assert_eq!(
-            record_after.key(),
-            recorded_key.as_deref(),
-            "later publish should preserve the existing record key"
+            record0, record0_after_reopen,
+            "record at offset 0 should be preserved after reopening and new append"
         );
         assert_eq!(
-            record_after.offset(),
-            recorded_offset,
-            "later publish should preserve the existing record offset"
+            record1, record1_after_reopen,
+            "record at offset 1 should be preserved after reopening and new append"
         );
-        assert_eq!(
-            record_after.payload(),
-            recorded_payload,
-            "later publish should preserve the existing record payload"
+        assert!(record2_after.is_some(), "record at offset 2 should exist");
+    }
+
+    #[test]
+    fn rejected_oversized_publish_preserves_records_and_next_offset() {
+        let dir = tempfile::tempdir().expect("failed to create temporary directory");
+        let dir_path = dir.path();
+        let limits = RecordLimits::new(3, 3);
+        let config = SegmentConfig::default();
+        let mut partition =
+            Partition::new(dir_path, config, limits).expect("failed to create partition");
+        let input0 = PublishInput::new(None, vec![0; 3]);
+        let offset = partition
+            .publish(input0)
+            .expect("publish should assign offset 0");
+
+        assert_eq!(offset, 0, "publish should assign offset 0");
+
+        let record = partition
+            .read(0)
+            .expect("record at offset 0 should exist")
+            .expect("record at offset 0 should exist");
+        let record_none = partition.read(1).expect("read at offset 1 should succeed");
+
+        assert!(record_none.is_none(), "record at offset 1 should not exist");
+
+        let input1 = PublishInput::new(None, vec![0; 4]);
+        let error = partition
+            .publish(input1)
+            .expect_err("publish should fail due to oversized payload");
+
+        assert!(
+            matches!(
+                error,
+                PartitionError::Storage {
+                    source: StorageError::Codec(CodecError::PayloadTooLarge)
+                }
+            ),
+            "publish should fail due to oversized payload"
         );
+
+        let reread_record = partition
+            .read(0)
+            .expect("record at offset 0 should exist")
+            .expect("record at offset 0 should exist");
+        let reread_record_none = partition.read(1).expect("read at offset 1 should succeed");
+
         assert_eq!(
-            record_after.timestamp(),
-            recorded_timestamp,
-            "later publish should preserve the existing record timestamp"
+            reread_record, record,
+            "record at offset 0 should remain unchanged after rejected publish"
         );
+        assert!(
+            reread_record_none.is_none(),
+            "record at offset 1 should not exist after rejected publish"
+        );
+
+        let input2 = PublishInput::new(None, vec![0; 3]);
+        let offset2 = partition
+            .publish(input2)
+            .expect("publish should succeed within payload limit");
         assert_eq!(
-            partition.records.len(),
-            1,
-            "rejected publish should not add a record"
+            offset2, 1,
+            "publish after rejected input should assign offset 1"
         );
     }
 }
