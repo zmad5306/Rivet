@@ -1131,4 +1131,37 @@ mod tests {
             "expected the partition-0 directory inside the malformed directory to still exist"
         );
     }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn opening_a_broker_with_a_non_utf8_topic_directory_name_rejects_the_catalog() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let data_root = tempfile::tempdir().expect("failed to create temporary data root");
+        let non_utf8_name = std::ffi::OsString::from_vec(vec![0xFF]);
+        let non_utf8_path = data_root.path().join(&non_utf8_name);
+        let partition_0_path = non_utf8_path.join("0");
+
+        std::fs::create_dir_all(&partition_0_path)
+            .expect("failed to create non-UTF-8 topic directory");
+
+        let error = Broker::open(
+            data_root.path().to_path_buf(),
+            SegmentConfig::default(),
+            RecordLimits::default(),
+        )
+        .expect_err("expected an error due to non-UTF-8 topic directory name");
+
+        assert!(
+            matches!(error, TopicError::UnexpectedCatalogEntry { path, reason: CatalogEntryErrorReason::InvalidTopicName } if path == non_utf8_path)
+        );
+        assert!(
+            non_utf8_path.exists(),
+            "expected the non-UTF-8 directory to still exist"
+        );
+        assert!(
+            partition_0_path.exists(),
+            "expected the partition-0 directory inside the non-UTF-8 directory to still exist"
+        );
+    }
 }
