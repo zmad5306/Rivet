@@ -14,13 +14,27 @@ Follow `AGENTS.md` and `docs/DESIGN.md`. Planning does not authorize production 
 1. Read the milestone issue, relevant design documentation, current code, tests, and any existing planning comments.
 2. Determine what is already complete from repository evidence. Do not infer completion solely from issue prose.
 3. Create or replace one issue comment titled `<Milestone> implementation tracker`.
-4. Include every planned phase from start through milestone completion. Under each phase, include implementation tasks and meaningful test checkpoints as GitHub checkboxes. Break broad outcomes into nested, independently reviewable steps when each requires a different edit, concept, or verification action.
+4. Include every planned phase from start through milestone completion in dependency and execution order. Within each phase, order component outcomes exactly as they should be performed, placing each implementation outcome immediately before its matching tests or verification. Break broad outcomes into nested, independently reviewable steps when each requires a different edit, concept, or verification action. Do not front-load a later contract, implementation, or test above work that will actually be assigned first.
 5. Mark already verified work complete and leave all unverified or future work unchecked.
 6. Include an explicit `Current position` naming the next phase and step.
 7. Include final verification items for formatting, linting, tests, platform check scripts when present, and documentation consistency.
 8. Return the direct link to the tracker comment.
 
 Prefer editing the existing authoritative tracker over posting a new tracker. Avoid splitting phase plans across comments when the master tracker can hold them clearly.
+
+## Tracker integrity and safe edits
+
+Treat the tracker as structured state, not free-form prose.
+
+- Make every checkbox independently verifiable. Implementation and test checkboxes must describe the same scope when they are intended as a pair.
+- Keep phases and their checkboxes in dependency and execution order. Within a phase, completed prerequisites and their tests should precede the first actionable unchecked item; `Current position` must point to that first unchecked item rather than to work listed above completed items.
+- Do not assign or begin a later checklist item while an earlier actionable item remains unchecked. If implementation evidence or learning needs change the intended sequence, reorder the tracker first, verify the new order, and only then hand off the newly first actionable item.
+- Check a parent only when every required child is checked. Never check a broad test item from narrow evidence while its corresponding implementation scope remains partly unimplemented.
+- When evidence completes only part of an existing checkbox, split that checkbox into a completed item for the verified scope and unchecked items for the remaining scope. Do not leave contradictory implementation/test states.
+- Before editing a live tracker, retain the complete current body as the rollback source. Preserve its title, headings, blank lines, indentation, checkbox nesting, links, notes, and unrelated history.
+- Update multiline GitHub comments through a mechanism that preserves the body byte-for-byte except for the intended edits, such as a body file. Do not interpolate multiline output captured from a native command without explicitly preserving newline boundaries; PowerShell may return native output as a string array and collapse it when interpolated.
+- After every live edit, read the comment back and verify at minimum: the title is still an H2, expected phase headings remain H3s, line breaks and checkbox indentation remain intact, `Current position` names the first actionable unchecked item, and only the intended checkbox/text changes occurred.
+- If post-edit verification detects collapsed formatting, lost content, malformed hierarchy, or unintended checkbox changes, immediately restore the retained body before doing any further tracker work.
 
 ## Review milestone work
 
@@ -44,6 +58,8 @@ Use the tracker as the status index, but verify it against the repository when a
 ## Guided learning slices
 
 Rivet is a learning project. Tracker checkboxes describe milestone outcomes and may still be too large for one learning turn. Before guiding work on the current checkbox, privately decompose it into ordered micro-steps. Give the learner only the next micro-step, not the entire checkbox implementation.
+
+Calibrate the handoff size to the learner's explicit preference. If the learner says the turns are too small or asks for a substantial slice, give one cohesive component-sized slice with a single review checkpoint rather than forcing one-line exchanges. Continue to create required failing test stubs before implementation, but do not require the learner to practice test-first development unless they choose to; the stubs may remain pending while they implement the component.
 
 A micro-step should normally require one small edit in one location or one verification command. It should have one immediate observable result and be reviewable on its own. If guidance asks the learner to create the test shell, arrange fixtures, perform the action, add all assertions, and run multiple checks, it is still too large and must be split further.
 
