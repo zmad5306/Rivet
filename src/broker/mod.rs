@@ -1211,4 +1211,108 @@ mod tests {
             "expected the partition-0 directory inside the target to still exist"
         );
     }
+
+    #[test]
+    fn create_topic_rejects_an_existing_topic_symlink_without_following_or_overwriting_it() {
+        let data_root = tempfile::tempdir().expect("failed to create temporary data root");
+        let mut broker = Broker::open(
+            data_root.path().to_path_buf(),
+            SegmentConfig::default(),
+            RecordLimits::default(),
+        )
+        .expect("failed to open broker");
+
+        let target = tempfile::tempdir().expect("failed to create temporary target directory");
+        let sentinel_path = target.path().join("sentinel");
+        std::fs::write(&sentinel_path, b"sentinel").expect("failed to write sentinel file");
+
+        let symlink_path = data_root.path().join("orders");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(target.path(), &symlink_path).expect("failed to create symlink");
+        #[cfg(windows)]
+        match std::os::windows::fs::symlink_dir(target.path(), &symlink_path) {
+            Ok(_) => {}
+            Err(error) => {
+                if error.kind() == std::io::ErrorKind::PermissionDenied {
+                    return;
+                } else {
+                    panic!("unexpected error creating symlink: {:?}", error);
+                }
+            }
+        }
+
+        let error = broker
+            .create_topic("orders".to_string(), 1)
+            .expect_err("expected an error due to existing symlink");
+        assert!(matches!(error, TopicError::AlreadyExists { name } if name == "orders"));
+        // Verify the Broker catalog remains empty after the failed creation.
+        assert!(
+            broker.list_topics().is_empty(),
+            "expected the broker catalog to remain empty"
+        );
+
+        // Inspect `orders` with symlink_metadata and verify it remains a symlink.
+        let metadata =
+            std::fs::symlink_metadata(&symlink_path).expect("failed to inspect topic symlink");
+        assert!(
+            metadata.file_type().is_symlink(),
+            "expected the topic entry to remain a symlink"
+        );
+
+        // Verify the target sentinel file and its exact bytes remain unchanged.
+        let sentinel_bytes = std::fs::read(&sentinel_path).expect("failed to read sentinel file");
+        assert_eq!(
+            sentinel_bytes, b"sentinel",
+            "expected the sentinel file to remain unchanged"
+        );
+    }
+
+    #[test]
+    fn create_topic_rejects_a_case_alias_on_case_insensitive_filesystems() {
+        let data_root = tempfile::tempdir().expect("failed to create temporary data root");
+        let key = vec![10, 20, 30];
+        let payload = vec![1, 2, 3];
+        let input = PublishInput::new(Some(key.clone()), payload.clone());
+        let mut broker = Broker::open(
+            data_root.path().to_path_buf(),
+            SegmentConfig::default(),
+            RecordLimits::default(),
+        )
+        .expect("failed to open broker");
+
+        broker
+            .create_topic("Orders".to_string(), 1)
+            .expect("failed to create topic");
+        let publish_result = broker
+            .publish("Orders".to_string().as_str(), input)
+            .expect("failed to publish to Orders");
+
+        assert_eq!(publish_result.offset(), 0);
+
+        let alias_path = data_root.path().join("orders");
+
+        if !alias_path.exists() {
+            return;
+        }
+
+        let error = broker
+            .create_topic("orders".to_string(), 1)
+            .expect_err("expected an error due to case-insensitive alias");
+        assert!(matches!(error, TopicError::AlreadyExists { name } if name == "orders"));
+
+        assert_eq!(broker.list_topics(), vec!["Orders".to_string()]);
+
+        let record = broker
+            .read(
+                "Orders",
+                publish_result.partition(),
+                publish_result.offset(),
+            )
+            .expect("failed to read record from Orders")
+            .expect("expected a record at the given offset");
+
+        assert_eq!(record.offset(), publish_result.offset());
+        assert_eq!(record.key().expect("expected a key"), key);
+        assert_eq!(record.payload(), payload);
+    }
 }
