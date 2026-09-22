@@ -257,6 +257,10 @@ rivet consume orders --group fraud-detector
 
 Consumer groups provide durable and independent reader positions. Persist the **next offset to read**, not the last processed offset. If a consumer handles offset `42`, a successful commit stores `43`.
 
+Committed offsets are unsigned decimal `u64` values. A missing commit returns `None` through the logical API and is distinct from a committed offset of `0`.
+
+Offset commits are monotonic. A commit greater than the currently stored value advances the consumer position, an equal commit succeeds as an idempotent no-op, and a lower commit is rejected with a typed rewind error without changing the stored value.
+
 The delivery contract is at least once. A crash after handling an event but before committing may cause redelivery. Exactly-once delivery is not supported.
 
 Offsets are stored on disk:
