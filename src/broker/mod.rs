@@ -1164,4 +1164,38 @@ mod tests {
             "expected the partition-0 directory inside the non-UTF-8 directory to still exist"
         );
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn opening_a_broker_with_a_topic_symlink_rejects_the_catalog_without_following_it() {
+        let data_root = tempfile::tempdir().expect("failed to create temporary data root");
+        let target = tempfile::tempdir().expect("failed to create temporary target directory");
+        let partition_0_path = target.path().join("0");
+        std::fs::create_dir_all(&partition_0_path).expect("failed to create partition 0 in target");
+        let symlink_path = data_root.path().join("orders");
+        std::os::unix::fs::symlink(target.path(), &symlink_path).expect("failed to create symlink");
+
+        let error = Broker::open(
+            data_root.path().to_path_buf(),
+            SegmentConfig::default(),
+            RecordLimits::default(),
+        )
+        .expect_err("expected an error due to topic symlink");
+
+        assert!(
+            matches!(error, TopicError::UnexpectedCatalogEntry { path, reason: CatalogEntryErrorReason::SymbolicLink } if path == symlink_path)
+        );
+
+        let metadata =
+            std::fs::symlink_metadata(&symlink_path).expect("failed to inspect topic symlink");
+
+        assert!(
+            metadata.file_type().is_symlink(),
+            "expected the topic entry to remain a symlink"
+        );
+        assert!(
+            partition_0_path.exists(),
+            "expected the partition-0 directory inside the target to still exist"
+        );
+    }
 }
