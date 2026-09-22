@@ -152,9 +152,13 @@ impl Broker {
 #[cfg(test)]
 mod tests {
     use std::error::Error;
+    use std::io::Write;
 
     use crate::broker::Broker;
-    use crate::error::{CatalogEntryErrorReason, TopicError, TopicNameError};
+    use crate::error::{
+        CatalogEntryErrorReason, CodecError, PartitionError, StorageError, TopicError,
+        TopicNameError,
+    };
     use crate::storage::record::{PublishInput, RecordLimits};
     use crate::storage::segment::SegmentConfig;
 
@@ -560,6 +564,187 @@ mod tests {
             order1_record.offset(),
             0,
             "expected the first published order to have offset 0"
+        );
+    }
+
+    #[test]
+    fn broker_startup_recovers_an_incomplete_active_tail_without_losing_valid_records() {
+        let key = b"key".to_vec();
+        let payload = b"payload".to_vec();
+        let order0 = PublishInput::new(Some(key.clone()), payload.clone());
+        let order1 = PublishInput::new(Some(key.clone()), payload.clone());
+        let data_root = tempfile::tempdir().expect("failed to create temporary data root");
+        let mut broker = Broker::open(
+            data_root.path().to_path_buf(),
+            SegmentConfig::default(),
+            RecordLimits::default(),
+        )
+        .expect("failed to open broker");
+
+        broker
+            .create_topic("orders".to_string(), 1)
+            .expect("failed to create topic");
+
+        let order0_result = broker
+            .publish("orders", order0)
+            .expect("failed to publish record");
+
+        drop(broker);
+
+        let segment_byte_len =
+            std::fs::metadata(data_root.path().join("orders/0/00000000000000000000.log"))
+                .expect("failed to get segment metadata")
+                .len();
+
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(data_root.path().join("orders/0/00000000000000000000.log"))
+            .expect("failed to open segment for appending");
+
+        file.write_all(&[0])
+            .expect("failed to append a single byte to the segment");
+
+        drop(file);
+
+        assert_eq!(
+            std::fs::metadata(data_root.path().join("orders/0/00000000000000000000.log"))
+                .expect("failed to get segment metadata")
+                .len(),
+            segment_byte_len + 1,
+            "expected the segment to be one byte longer after appending"
+        );
+
+        let mut broker = Broker::open(
+            data_root.path().to_path_buf(),
+            SegmentConfig::default(),
+            RecordLimits::default(),
+        )
+        .expect("failed to open broker after appending incomplete byte");
+
+        assert_eq!(
+            std::fs::metadata(data_root.path().join("orders/0/00000000000000000000.log"))
+                .expect("failed to get segment metadata")
+                .len(),
+            segment_byte_len,
+            "expected the segment to be truncated back to its original length after recovery"
+        );
+
+        let record = broker
+            .read("orders", order0_result.partition(), order0_result.offset())
+            .expect("failed to read the first record")
+            .expect("expected the first record to exist");
+
+        assert_eq!(
+            record.offset(),
+            order0_result.offset(),
+            "expected the record offset to match the original offset"
+        );
+        assert_eq!(
+            record.key().expect("expected the record to have a key"),
+            key,
+            "expected the record key to match the original key"
+        );
+        assert_eq!(
+            record.payload(),
+            payload,
+            "expected the record payload to match the original payload"
+        );
+
+        let order1_result = broker
+            .publish("orders", order1)
+            .expect("failed to publish the second record");
+
+        assert_eq!(
+            order1_result.offset(),
+            1,
+            "expected the second record to have offset 1"
+        );
+    }
+
+    #[test]
+    fn broker_startup_propagates_fatal_record_corruption_without_modifying_the_segment() {
+        let orders = "orders";
+        let key = vec![1, 2, 3];
+        let payload = vec![4, 5, 6, 7];
+        let order0_input = PublishInput::new(Some(key.clone()), payload.clone());
+        let data_root = tempfile::tempdir().expect("failed to create temporary data root");
+        let mut broker = Broker::open(
+            data_root.path().to_path_buf(),
+            SegmentConfig::default(),
+            RecordLimits::default(),
+        )
+        .expect("failed to open broker");
+
+        broker
+            .create_topic(orders.to_string(), 1)
+            .expect("failed to create topic");
+        let order0_result = broker
+            .publish(orders, order0_input)
+            .expect("failed to publish the first record");
+
+        assert_eq!(
+            order0_result.offset(),
+            0,
+            "expected the first record to have offset 0"
+        );
+
+        drop(broker);
+
+        let mut file_bytes =
+            std::fs::read(data_root.path().join("orders/0/00000000000000000000.log"))
+                .expect("failed to read the segment file");
+
+        file_bytes[33] ^= 0xFF; // Flip the first byte of the payload
+        std::fs::write(
+            data_root.path().join("orders/0/00000000000000000000.log"),
+            &file_bytes,
+        )
+        .expect("failed to write the modified segment file");
+
+        let corrupted_file_bytes =
+            std::fs::read(data_root.path().join("orders/0/00000000000000000000.log"))
+                .expect("failed to read the corrupted segment file");
+
+        let topic_error = Broker::open(
+            data_root.path().to_path_buf(),
+            SegmentConfig::default(),
+            RecordLimits::default(),
+        )
+        .expect_err("expected an error due to corrupted record");
+
+        let partition_error = topic_error
+            .source()
+            .expect("expected a source error for the topic error")
+            .downcast_ref::<PartitionError>()
+            .expect("expected a PartitionError");
+
+        let storage_error = partition_error
+            .source()
+            .expect("expected a source error for the partition error")
+            .downcast_ref::<StorageError>()
+            .expect("expected a StorageError");
+
+        assert!(
+            matches!(storage_error, StorageError::CorruptRecord { byte_position, .. } if byte_position == &u64::try_from(0).expect("failed to convert byte position to u64")),
+            "expected a corrupt record error at byte position 0"
+        );
+
+        let codec_error = storage_error
+            .source()
+            .expect("expected a source error for the storage error")
+            .downcast_ref::<CodecError>()
+            .expect("expected a CodecError");
+
+        assert!(
+            matches!(codec_error, CodecError::InvalidChecksum),
+            "expected an invalid checksum error for the codec error"
+        );
+
+        assert_eq!(
+            std::fs::read(data_root.path().join("orders/0/00000000000000000000.log"))
+                .expect("failed to read segment file"),
+            corrupted_file_bytes,
+            "expected the segment file to match the corrupt snapshot"
         );
     }
 
