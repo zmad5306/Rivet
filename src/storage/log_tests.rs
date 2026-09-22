@@ -12,10 +12,6 @@ use crate::{
     },
 };
 
-fn sample_record(offset: u64) -> Record {
-    Record::new(offset, 1_700_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3])
-}
-
 #[test]
 fn create_active_creates_empty_log_and_supports_append_scan_and_reopen() {
     let dir = tempfile::tempdir().expect("temporary directory should be created");
@@ -25,7 +21,7 @@ fn create_active_creates_empty_log_and_supports_append_scan_and_reopen() {
     let mut scanner = log
         .scan()
         .expect("scanning an empty active log should succeed");
-    let record = sample_record(0);
+    let record = Record::new(0, 1_700_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3]);
     let encoded_record = record
         .encode(&RecordLimits::default())
         .expect("encoding the sample record should succeed");
@@ -262,7 +258,7 @@ fn opening_new_log_creates_empty_file() {
 
 #[test]
 fn reopening_log_preserves_existing_bytes() {
-    let record = sample_record(0);
+    let record = Record::new(0, 1_700_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3]);
 
     let dir = tempfile::tempdir().expect("temporary directory should be created");
     let path = dir.path().join("reopen-preserves-bytes.log");
@@ -290,7 +286,7 @@ fn reopening_log_preserves_existing_bytes() {
 
 #[test]
 fn append_one_record_writes_expected_encoded_bytes() {
-    let record = sample_record(0);
+    let record = Record::new(0, 1_700_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3]);
     let expected_bytes = record
         .encode(&RecordLimits::default())
         .expect("encoding the record should succeed");
@@ -314,7 +310,7 @@ fn append_one_record_writes_expected_encoded_bytes() {
 
 #[test]
 fn later_appends_grow_file_and_preserve_original_prefix() {
-    let record1 = sample_record(0);
+    let record1 = Record::new(0, 1_700_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3]);
     let record2 = Record::new(
         0,
         1_600_000_000,
@@ -360,7 +356,7 @@ fn later_appends_grow_file_and_preserve_original_prefix() {
 
 #[test]
 fn append_after_reopening_preserves_previous_records() {
-    let record1 = sample_record(0);
+    let record1 = Record::new(0, 1_700_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3]);
     let record2 = Record::new(
         0,
         1_600_000_000,
@@ -411,7 +407,7 @@ fn append_after_reopening_preserves_previous_records() {
 
 #[test]
 fn codec_rejection_leaves_file_unchanged() {
-    let record1 = sample_record(0);
+    let record1 = Record::new(0, 1_700_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3]);
     let record2 = Record::new(0, 1_600_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3, 4]);
     let limits = RecordLimits::new(3, 3);
 
@@ -489,7 +485,7 @@ fn scanning_empty_log_yields_no_records() {
 
 #[test]
 fn scanning_one_record_preserves_all_fields() {
-    let record = sample_record(0);
+    let record = Record::new(0, 1_700_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3]);
     let dir = tempfile::tempdir().expect("temporary directory should be created");
     let path = dir.path().join("scan-single-record.log");
     let (mut log, _) = Log::open_active(&path, 0, RecordLimits::default())
@@ -547,9 +543,9 @@ fn scanning_many_records_preserves_offset_order_and_contents() {
 
 #[test]
 fn scanning_reopened_log_preserves_all_records() {
-    let record1 = sample_record(0);
-    let record2 = sample_record(1);
-    let record3 = sample_record(2);
+    let record1 = Record::new(0, 1_700_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3]);
+    let record2 = Record::new(1, 1_700_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3]);
+    let record3 = Record::new(2, 1_700_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3]);
     let dir = tempfile::tempdir().expect("temporary directory should be created");
     let path = dir.path().join("scan-reopened.log");
     let (mut log, _) = Log::open_active(&path, 0, RecordLimits::default())
@@ -580,8 +576,8 @@ fn scanning_reopened_log_preserves_all_records() {
 
 #[test]
 fn append_after_scanning_writes_at_end() {
-    let record1 = sample_record(0);
-    let record2 = sample_record(1);
+    let record1 = Record::new(0, 1_700_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3]);
+    let record2 = Record::new(1, 1_700_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3]);
     let dir = tempfile::tempdir().expect("temporary directory should be created");
     let path = dir.path().join("append-after-scan.log");
     let (mut log, _) = Log::open_active(&path, 0, RecordLimits::default())
@@ -635,8 +631,8 @@ fn append_after_scanning_writes_at_end() {
 
 #[test]
 fn opening_truncates_partial_trailing_header() {
-    let record1 = sample_record(0);
-    let record2 = sample_record(1);
+    let record1 = Record::new(0, 1_700_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3]);
+    let record2 = Record::new(1, 1_700_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3]);
     let record1_bytes = record1
         .encode(&RecordLimits::default())
         .expect("encoding the first record should succeed");
@@ -683,8 +679,8 @@ fn opening_truncates_partial_trailing_header() {
 
 #[test]
 fn opening_truncates_partial_trailing_body() {
-    let record1 = sample_record(0);
-    let record2 = sample_record(1);
+    let record1 = Record::new(0, 1_700_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3]);
+    let record2 = Record::new(1, 1_700_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3]);
     let record1_bytes = record1
         .encode(&RecordLimits::default())
         .expect("encoding the first record should succeed");
@@ -731,8 +727,8 @@ fn opening_truncates_partial_trailing_body() {
 
 #[test]
 fn opening_truncates_partial_trailing_checksum() {
-    let record1 = sample_record(0);
-    let record2 = sample_record(1);
+    let record1 = Record::new(0, 1_700_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3]);
+    let record2 = Record::new(1, 1_700_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3]);
     let record1_bytes = record1
         .encode(&RecordLimits::default())
         .expect("encoding the first record should succeed");
@@ -779,7 +775,7 @@ fn opening_truncates_partial_trailing_checksum() {
 
 #[test]
 fn opening_rejects_invalid_checksum_without_modifying_file() {
-    let record = sample_record(0);
+    let record = Record::new(0, 1_700_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3]);
     let mut bytes = record
         .encode(&RecordLimits::default())
         .expect("encoding the first record should succeed");
@@ -823,7 +819,7 @@ fn opening_rejects_invalid_checksum_without_modifying_file() {
 
 #[test]
 fn first_corrupt_record_reports_path_and_byte_position_zero() {
-    let record = sample_record(0);
+    let record = Record::new(0, 1_700_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3]);
     let mut record_bytes = record
         .encode(&RecordLimits::default())
         .expect("encoding the record should succeed");
@@ -853,11 +849,11 @@ fn first_corrupt_record_reports_path_and_byte_position_zero() {
 
 #[test]
 fn mid_log_corrupt_record_reports_path_and_record_start() {
-    let record1 = sample_record(0);
+    let record1 = Record::new(0, 1_700_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3]);
     let record1_bytes = record1
         .encode(&RecordLimits::default())
         .expect("encoding the record should succeed");
-    let record2 = sample_record(1);
+    let record2 = Record::new(1, 1_700_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3]);
     let mut record2_bytes = record2
         .encode(&RecordLimits::default())
         .expect("encoding the record should succeed");
@@ -899,12 +895,12 @@ fn mid_log_corrupt_record_reports_path_and_record_start() {
 #[test]
 fn codec_rejection_allows_later_valid_appends() {
     let limits = RecordLimits::new(3, 3);
-    let record1 = sample_record(0);
+    let record1 = Record::new(0, 1_700_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3]);
     let oversized_key_record =
         Record::new(1, 1_700_000_000, Some(vec![10, 20, 30, 40]), vec![1, 2, 3]);
     let oversized_payload_record =
         Record::new(1, 1_700_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3, 4]);
-    let record2 = sample_record(2);
+    let record2 = Record::new(2, 1_700_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3]);
     let dir = tempfile::tempdir().expect("temporary directory should be created");
     let path = dir.path().join("limits.log");
     let (mut log, _) = Log::open_active(&path, 0, limits).expect("opening the log should succeed");
@@ -978,7 +974,7 @@ fn scanning_relative_path_survives_working_directory_change() {
         return;
     }
 
-    let record = sample_record(0);
+    let record = Record::new(0, 1_700_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3]);
     let (mut log, _) = Log::open_active(
         std::path::Path::new("events.log"),
         0,
@@ -1005,7 +1001,7 @@ fn scanning_relative_path_survives_working_directory_change() {
 
 #[test]
 fn scanning_renamed_log_reads_original_file() {
-    let record = sample_record(0);
+    let record = Record::new(0, 1_700_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3]);
     let dir = tempfile::tempdir().expect("temporary directory should be created");
     let path = dir.path().join("original.log");
     let (mut log, _) = Log::open_active(&path, 0, RecordLimits::default())
@@ -1035,9 +1031,10 @@ fn scanning_renamed_log_reads_original_file() {
 
 #[test]
 fn scanning_replaced_path_reads_original_file() {
-    let original_only_record = sample_record(0);
-    let shared_record = sample_record(1);
-    let replacement_only_record = sample_record(2);
+    let original_only_record = Record::new(0, 1_700_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3]);
+    let shared_record = Record::new(1, 1_700_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3]);
+    let replacement_only_record =
+        Record::new(2, 1_700_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3]);
     let dir = tempfile::tempdir().expect("temporary directory should be created");
     let path = dir.path().join("original.log");
     let (mut log, _) = Log::open_active(&path, 0, RecordLimits::default())
@@ -1202,7 +1199,12 @@ fn append_after_partial_scan_preserves_unread_records() {
 
     drop(scanner);
 
-    let record = sample_record(u64::try_from(record_count).expect("should fit into u64"));
+    let record = Record::new(
+        u64::try_from(record_count).expect("should fit into u64"),
+        1_700_000_000,
+        Some(vec![10, 20, 30]),
+        vec![1, 2, 3],
+    );
 
     log.append(&record)
         .expect("appending a record should succeed");
@@ -1230,7 +1232,12 @@ fn recovery_restores_next_offset_after_zero_records() {
     let (mut log, next_offset) = Log::open_active(&path, 0, RecordLimits::default())
         .expect("opening the log should succeed");
     assert_eq!(next_offset, 0, "next offset should be 0 for an empty log");
-    let record = sample_record(next_offset);
+    let record = Record::new(
+        next_offset,
+        1_700_000_000,
+        Some(vec![10, 20, 30]),
+        vec![1, 2, 3],
+    );
     log.append(&record)
         .expect("appending a record should succeed");
     drop(log);
@@ -1250,7 +1257,12 @@ fn recovery_restores_next_offset_after_one_record() {
         .expect("opening the log should succeed");
     assert_eq!(next_offset, 0, "next offset should be 0 for an empty log");
 
-    let record1 = sample_record(next_offset);
+    let record1 = Record::new(
+        next_offset,
+        1_700_000_000,
+        Some(vec![10, 20, 30]),
+        vec![1, 2, 3],
+    );
     log.append(&record1)
         .expect("appending a record should succeed");
     drop(log);
@@ -1262,7 +1274,12 @@ fn recovery_restores_next_offset_after_one_record() {
         "next offset should be 1 after appending one record"
     );
 
-    let record2 = sample_record(next_offset);
+    let record2 = Record::new(
+        next_offset,
+        1_700_000_000,
+        Some(vec![10, 20, 30]),
+        vec![1, 2, 3],
+    );
     log.append(&record2)
         .expect("appending a second record should succeed");
     drop(log);
@@ -1295,7 +1312,12 @@ fn recovery_restores_next_offset_after_one_hundred_records() {
     assert_eq!(next_offset, 0, "next offset should be 0 for an empty log");
 
     for i in 0..100 {
-        let record = sample_record(next_offset + i);
+        let record = Record::new(
+            next_offset + i,
+            1_700_000_000,
+            Some(vec![10, 20, 30]),
+            vec![1, 2, 3],
+        );
         log.append(&record)
             .expect("appending a record should succeed");
         records.push(record);
@@ -1317,7 +1339,12 @@ fn recovery_restores_next_offset_after_one_hundred_records() {
         "scanned records should match appended records after recovery"
     );
 
-    let record101 = sample_record(next_offset);
+    let record101 = Record::new(
+        next_offset,
+        1_700_000_000,
+        Some(vec![10, 20, 30]),
+        vec![1, 2, 3],
+    );
     log.append(&record101)
         .expect("appending the 101st record should succeed");
     drop(log);
@@ -1343,12 +1370,12 @@ fn recovery_restores_next_offset_after_one_hundred_records() {
 #[test]
 fn recovery_truncates_every_incomplete_record_prefix() {
     let dir = tempfile::tempdir().expect("temporary directory should be created");
-    let encoded_bytes = sample_record(1)
+    let encoded_bytes = Record::new(1, 1_700_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3])
         .encode(&RecordLimits::default())
         .expect("encoding the second record should succeed");
 
     for n in 0..encoded_bytes.len() {
-        let record = sample_record(0);
+        let record = Record::new(0, 1_700_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3]);
         let path = dir.path().join(format!("trunc-{}.log", n));
         let (mut log, next_offset) = Log::open_active(&path, 0, RecordLimits::default())
             .expect("opening the log should succeed");
@@ -1393,7 +1420,12 @@ fn recovery_truncates_every_incomplete_record_prefix() {
                 .expect("encoding the first record should succeed")
         );
 
-        let second_record = sample_record(next_offset);
+        let second_record = Record::new(
+            next_offset,
+            1_700_000_000,
+            Some(vec![10, 20, 30]),
+            vec![1, 2, 3],
+        );
         log.append(&second_record)
             .expect("appending the record after recovery should succeed");
 
@@ -1413,9 +1445,9 @@ fn recovery_truncates_every_incomplete_record_prefix() {
 
 #[test]
 fn repeated_recovery_preserves_file_bytes_and_next_offset() {
-    let record1 = sample_record(0);
-    let record2 = sample_record(1);
-    let record3 = sample_record(2);
+    let record1 = Record::new(0, 1_700_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3]);
+    let record2 = Record::new(1, 1_700_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3]);
+    let record3 = Record::new(2, 1_700_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3]);
     let record3_bytes = record3
         .encode(&RecordLimits::default())
         .expect("encoding the third record should succeed");
@@ -1475,11 +1507,11 @@ fn repeated_recovery_preserves_file_bytes_and_next_offset() {
 
 #[test]
 fn recovery_rejects_offset_gaps_without_modifying_file() {
-    let record1 = sample_record(0);
+    let record1 = Record::new(0, 1_700_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3]);
     let record1_bytes = record1
         .encode(&RecordLimits::default())
         .expect("encoding record1 should succeed");
-    let record2 = sample_record(2);
+    let record2 = Record::new(2, 1_700_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3]);
     let record2_bytes = record2
         .encode(&RecordLimits::default())
         .expect("encoding record2 should succeed");
@@ -1522,7 +1554,7 @@ fn recovery_rejects_offset_gaps_without_modifying_file() {
 
 #[test]
 fn recovery_rejects_offset_gaps_at_beginning_without_modifying_file() {
-    let record = sample_record(1);
+    let record = Record::new(1, 1_700_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3]);
     let record_bytes = record
         .encode(&RecordLimits::default())
         .expect("encoding record should succeed");
@@ -1562,11 +1594,11 @@ fn recovery_rejects_offset_gaps_at_beginning_without_modifying_file() {
 
 #[test]
 fn recovery_rejects_duplicate_offsets_without_modifying_file() {
-    let record1 = sample_record(0);
+    let record1 = Record::new(0, 1_700_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3]);
     let record1_bytes = record1
         .encode(&RecordLimits::default())
         .expect("encoding record1 should succeed");
-    let record2 = sample_record(0);
+    let record2 = Record::new(0, 1_700_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3]);
     let record2_bytes = record2
         .encode(&RecordLimits::default())
         .expect("encoding record2 should succeed");
@@ -1609,15 +1641,15 @@ fn recovery_rejects_duplicate_offsets_without_modifying_file() {
 
 #[test]
 fn recovery_rejects_regressing_offsets_without_modifying_file() {
-    let record1 = sample_record(0);
+    let record1 = Record::new(0, 1_700_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3]);
     let record1_bytes = record1
         .encode(&RecordLimits::default())
         .expect("encoding record1 should succeed");
-    let record2 = sample_record(1);
+    let record2 = Record::new(1, 1_700_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3]);
     let record2_bytes = record2
         .encode(&RecordLimits::default())
         .expect("encoding record2 should succeed");
-    let record3 = sample_record(0);
+    let record3 = Record::new(0, 1_700_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3]);
     let record3_bytes = record3
         .encode(&RecordLimits::default())
         .expect("encoding record3 should succeed");
@@ -1662,15 +1694,15 @@ fn recovery_rejects_regressing_offsets_without_modifying_file() {
 
 #[test]
 fn recovery_rejects_mid_log_invalid_magic_without_modifying_file() {
-    let record1 = sample_record(0);
+    let record1 = Record::new(0, 1_700_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3]);
     let record1_bytes = record1
         .encode(&RecordLimits::default())
         .expect("encoding record1 should succeed");
-    let record2 = sample_record(1);
+    let record2 = Record::new(1, 1_700_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3]);
     let record2_bytes = record2
         .encode(&RecordLimits::default())
         .expect("encoding record2 should succeed");
-    let record3 = sample_record(0);
+    let record3 = Record::new(0, 1_700_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3]);
     let record3_bytes = record3
         .encode(&RecordLimits::default())
         .expect("encoding record3 should succeed");
@@ -1716,11 +1748,11 @@ fn recovery_rejects_mid_log_invalid_magic_without_modifying_file() {
 
 #[test]
 fn mid_log_invalid_magic_reports_context_and_source() {
-    let record1 = sample_record(0);
+    let record1 = Record::new(0, 1_700_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3]);
     let record1_bytes = record1
         .encode(&RecordLimits::default())
         .expect("encoding record should succeed");
-    let record2 = sample_record(1);
+    let record2 = Record::new(1, 1_700_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3]);
     let record2_bytes = record2
         .encode(&RecordLimits::default())
         .expect("encoding record2 should succeed");
@@ -1729,7 +1761,7 @@ fn mid_log_invalid_magic_reports_context_and_source() {
         bytes[0] = 0; // Invalidate the magic byte
         bytes
     };
-    let record3 = sample_record(2);
+    let record3 = Record::new(2, 1_700_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3]);
     let record3_bytes = record3
         .encode(&RecordLimits::default())
         .expect("encoding record3 should succeed");
@@ -1797,15 +1829,15 @@ fn mid_log_invalid_magic_reports_context_and_source() {
 
 #[test]
 fn recovery_rejects_mid_log_invalid_checksum_without_modifying_file() {
-    let record1 = sample_record(0);
+    let record1 = Record::new(0, 1_700_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3]);
     let record1_bytes = record1
         .encode(&RecordLimits::default())
         .expect("encoding record1 should succeed");
-    let record2 = sample_record(1);
+    let record2 = Record::new(1, 1_700_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3]);
     let record2_bytes = record2
         .encode(&RecordLimits::default())
         .expect("encoding record2 should succeed");
-    let record3 = sample_record(0);
+    let record3 = Record::new(0, 1_700_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3]);
     let record3_bytes = record3
         .encode(&RecordLimits::default())
         .expect("encoding record3 should succeed");
@@ -1870,9 +1902,9 @@ fn recovery_of_empty_log_returns_nonzero_base_offset() {
 
 #[test]
 fn recovery_restores_next_offset_from_nonzero_base() {
-    let record1 = sample_record(42);
-    let record2 = sample_record(43);
-    let record3 = sample_record(44);
+    let record1 = Record::new(42, 1_700_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3]);
+    let record2 = Record::new(43, 1_700_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3]);
+    let record3 = Record::new(44, 1_700_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3]);
     let record1_bytes = record1
         .encode(&RecordLimits::default())
         .expect("encoding record1 should succeed");
@@ -1922,7 +1954,12 @@ fn recovery_restores_next_offset_from_nonzero_base() {
 #[test]
 fn recovery_rejects_first_offset_below_nonzero_base_without_modifying_file() {
     let base_offset = 42;
-    let record = sample_record(base_offset - 1);
+    let record = Record::new(
+        base_offset - 1,
+        1_700_000_000,
+        Some(vec![10, 20, 30]),
+        vec![1, 2, 3],
+    );
     let record_bytes = record
         .encode(&RecordLimits::default())
         .expect("encoding the record should succeed");
@@ -1953,7 +1990,12 @@ fn recovery_rejects_first_offset_below_nonzero_base_without_modifying_file() {
 #[test]
 fn recovery_rejects_first_offset_above_nonzero_base_without_modifying_file() {
     let base_offset = 42;
-    let record = sample_record(base_offset + 1);
+    let record = Record::new(
+        base_offset + 1,
+        1_700_000_000,
+        Some(vec![10, 20, 30]),
+        vec![1, 2, 3],
+    );
     let record_bytes = record
         .encode(&RecordLimits::default())
         .expect("encoding the record should succeed");
@@ -2008,7 +2050,12 @@ fn closed_log_validates_and_scans_records_from_nonzero_base() {
     let path = dir.path().join("closed.log");
 
     for offset in base_offset..max_offset {
-        records.push(sample_record(offset));
+        records.push(Record::new(
+            offset,
+            1_700_000_000,
+            Some(vec![10, 20, 30]),
+            vec![1, 2, 3],
+        ));
     }
 
     for record in &records {
@@ -2056,8 +2103,18 @@ fn closed_log_validates_and_scans_records_from_nonzero_base() {
 #[test]
 fn closed_log_rejects_every_incomplete_tail_without_modifying_file() {
     let base_offset = 42;
-    let record1 = sample_record(base_offset);
-    let record2 = sample_record(base_offset + 1);
+    let record1 = Record::new(
+        base_offset,
+        1_700_000_000,
+        Some(vec![10, 20, 30]),
+        vec![1, 2, 3],
+    );
+    let record2 = Record::new(
+        base_offset + 1,
+        1_700_000_000,
+        Some(vec![10, 20, 30]),
+        vec![1, 2, 3],
+    );
     let record1_bytes = record1
         .encode(&RecordLimits::default())
         .expect("encoding record1 should succeed");
@@ -2106,8 +2163,18 @@ fn closed_log_rejects_every_incomplete_tail_without_modifying_file() {
 #[test]
 fn active_and_closed_opening_treat_same_incomplete_tail_differently() {
     let base_offset = 42;
-    let record1 = sample_record(base_offset);
-    let record2 = sample_record(base_offset + 1);
+    let record1 = Record::new(
+        base_offset,
+        1_700_000_000,
+        Some(vec![10, 20, 30]),
+        vec![1, 2, 3],
+    );
+    let record2 = Record::new(
+        base_offset + 1,
+        1_700_000_000,
+        Some(vec![10, 20, 30]),
+        vec![1, 2, 3],
+    );
     let record1_bytes = record1
         .encode(&RecordLimits::default())
         .expect("encoding record1 should succeed");

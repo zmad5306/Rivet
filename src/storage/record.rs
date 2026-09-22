@@ -277,11 +277,6 @@ mod tests {
     };
 
     use super::{PublishInput, Record};
-
-    mod common {
-        include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/common/mod.rs"));
-    }
-    use common::sample_record;
     use crc32fast::hash;
 
     #[test]
@@ -884,7 +879,7 @@ mod tests {
     fn codec_encoding_is_deterministic() {
         let limits = RecordLimits::default();
 
-        let record = sample_record(0);
+        let record = Record::new(0, 1_700_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3]);
 
         let bytes1 = record
             .encode(&limits)
@@ -1209,7 +1204,7 @@ mod tests {
     #[test]
     fn codec_decode_rejects_corruption_in_every_magic_byte() {
         for n in 0..4 {
-            let record = sample_record(0);
+            let record = Record::new(0, 1_700_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3]);
             let mut bytes = record
                 .encode(&RecordLimits::default())
                 .expect("record should encode successfully");
@@ -1426,7 +1421,7 @@ mod tests {
     #[test]
     fn codec_decode_rejects_corrupted_offset() {
         for n in 5..13 {
-            let record = sample_record(0);
+            let record = Record::new(0, 1_700_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3]);
             let mut bytes = record
                 .encode(&RecordLimits::default())
                 .expect("encoding should succeed");
@@ -1444,7 +1439,7 @@ mod tests {
     #[test]
     fn codec_decode_rejects_corrupted_timestamp() {
         for n in 13..21 {
-            let record = sample_record(0);
+            let record = Record::new(0, 1_700_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3]);
             let mut bytes = record
                 .encode(&RecordLimits::default())
                 .expect("encoding should succeed");
@@ -1477,7 +1472,7 @@ mod tests {
 
     #[test]
     fn codec_decode_rejects_corrupted_key_length() {
-        let record = sample_record(0);
+        let record = Record::new(0, 1_700_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3]);
         let mut bytes = record
             .encode(&RecordLimits::default())
             .expect("encoding should succeed");
@@ -1497,7 +1492,7 @@ mod tests {
 
     #[test]
     fn codec_decode_rejects_corrupted_payload_length() {
-        let record = sample_record(0);
+        let record = Record::new(0, 1_700_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3]);
         let mut bytes = record
             .encode(&RecordLimits::default())
             .expect("encoding should succeed");
@@ -1517,7 +1512,7 @@ mod tests {
 
     #[test]
     fn codec_decode_rejects_corrupted_key() {
-        let record = sample_record(0);
+        let record = Record::new(0, 1_700_000_000, Some(vec![10, 20, 30]), vec![1, 2, 3]);
         let mut bytes = record
             .encode(&RecordLimits::default())
             .expect("encoding should succeed");
