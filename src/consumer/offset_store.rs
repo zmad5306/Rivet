@@ -553,14 +553,184 @@ mod tests {
 
     #[test]
     fn commit_offset_rejects_rewind_and_preserves_committed_value() {
-        // TODO: Create a temporary `OffsetStore` with validated group
-        // `fraud-detector` and topic `orders`, then commit next offset 43 to
-        // partition 0 as the established consumer position.
-        // TODO: Attempt to commit the lower next offset 42 and verify the exact
-        // typed rewind error reports current 43 and requested 42.
-        // TODO: Read the committed offset through `get_committed_offset` and the
-        // final offset file through `offset_path`; verify both still contain 43
-        // and that no sibling filename ends in `.tmp`.
-        todo!()
+        let root = tempfile::tempdir().expect("failed to create temporary root");
+        let offset_store = OffsetStore::new(root.path());
+        let fraud_detector_group_name = ConsumerGroupName::new("fraud-detector".to_string())
+            .expect("should succeed for valid group name");
+        let orders_topic_name =
+            TopicName::new("orders".to_string()).expect("should succeed for valid topic name");
+        let final_offset_path = offset_store
+            .offset_path(&fraud_detector_group_name, &orders_topic_name, 0)
+            .expect("should succeed for valid partition id 0");
+
+        offset_store
+            .commit_offset(&fraud_detector_group_name, &orders_topic_name, 0, 43)
+            .expect("failed to commit offset");
+
+        assert_eq!(
+            offset_store
+                .get_committed_offset(&fraud_detector_group_name, &orders_topic_name, 0)
+                .expect("failed to get committed offset")
+                .expect("no committed offset found"),
+            43
+        );
+        assert_eq!(
+            std::fs::read(&final_offset_path).expect("failed to read final offset file"),
+            b"43".to_vec(),
+            "final offset file should contain the committed offset 43"
+        );
+
+        let error = offset_store
+            .commit_offset(&fraud_detector_group_name, &orders_topic_name, 0, 42)
+            .expect_err("expected rewind error");
+
+        assert!(matches!(
+            error,
+            OffsetStoreError::Rewind {
+                current: 43,
+                requested: 42
+            }
+        ));
+
+        assert_eq!(
+            offset_store
+                .get_committed_offset(&fraud_detector_group_name, &orders_topic_name, 0)
+                .expect("failed to get committed offset")
+                .expect("no committed offset found"),
+            43
+        );
+        assert_eq!(
+            std::fs::read(&final_offset_path).expect("failed to read final offset file"),
+            b"43".to_vec(),
+            "final offset file should still contain the committed offset 43"
+        );
+
+        let mut asserted = false;
+        for entry in std::fs::read_dir(
+            &final_offset_path
+                .parent()
+                .expect("failed to get parent directory"),
+        )
+        .expect("failed to read offset path")
+        {
+            let entry = entry.expect("failed to read directory entry");
+            let file = entry.path();
+            let file_name = file.file_name().expect("failed to get file name");
+            let file_name = file_name
+                .to_str()
+                .expect("failed to convert file name to string");
+            assert!(
+                !file_name.ends_with(".tmp"),
+                "temporary offset file should not exist without a sibling `.tmp` file"
+            );
+            asserted = true;
+        }
+        assert!(asserted, "no files were found in the offset path");
+    }
+
+    #[test]
+    fn committed_offsets_survive_reopen_with_group_and_topic_isolation() {
+        let root = tempfile::tempdir().expect("failed to create temporary data root");
+        let offset_store = OffsetStore::new(root.path());
+        let fraud_detector_group_name = ConsumerGroupName::new("fraud-detector".to_string())
+            .expect("failed to create fraud detector group name");
+        let analytics_group_name = ConsumerGroupName::new("analytics".to_string())
+            .expect("failed to create analytics group name");
+        let orders_topic_name =
+            TopicName::new("orders".to_string()).expect("failed to create orders topic name");
+        let payments_topic_name =
+            TopicName::new("payments".to_string()).expect("failed to create payments topic name");
+
+        offset_store
+            .commit_offset(&fraud_detector_group_name, &orders_topic_name, 0, 42)
+            .expect("failed to commit offset");
+        offset_store
+            .commit_offset(&analytics_group_name, &orders_topic_name, 0, 43)
+            .expect("failed to commit offset");
+        offset_store
+            .commit_offset(&fraud_detector_group_name, &payments_topic_name, 0, 44)
+            .expect("failed to commit offset");
+        offset_store
+            .commit_offset(&analytics_group_name, &payments_topic_name, 0, 45)
+            .expect("failed to commit offset");
+
+        drop(offset_store);
+
+        let offset_store = OffsetStore::new(root.path());
+
+        assert_eq!(
+            offset_store
+                .get_committed_offset(&fraud_detector_group_name, &orders_topic_name, 0)
+                .expect("failed to get committed offset"),
+            Some(42),
+            "committed offset for fraud-detector/orders should be 42"
+        );
+        assert_eq!(
+            offset_store
+                .get_committed_offset(&analytics_group_name, &orders_topic_name, 0)
+                .expect("failed to get committed offset"),
+            Some(43),
+            "committed offset for analytics/orders should be 43"
+        );
+        assert_eq!(
+            offset_store
+                .get_committed_offset(&fraud_detector_group_name, &payments_topic_name, 0)
+                .expect("failed to get committed offset"),
+            Some(44),
+            "committed offset for fraud-detector/payments should be 44"
+        );
+        assert_eq!(
+            offset_store
+                .get_committed_offset(&analytics_group_name, &payments_topic_name, 0)
+                .expect("failed to get committed offset"),
+            Some(45),
+            "committed offset for analytics/payments should be 45"
+        );
+        assert_eq!(
+            offset_store
+                .get_committed_offset(
+                    &fraud_detector_group_name,
+                    &TopicName::new("non-existent".to_string())
+                        .expect("failed to create non-existent topic name"),
+                    0
+                )
+                .expect("failed to get committed offset"),
+            None,
+            "committed offset for non-existent topic should be None"
+        );
+    }
+
+    #[test]
+    fn commit_offset_rejects_file_at_reserved_directory_path() {
+        let sentinal_data = b"sentinal-data";
+        let root = tempfile::tempdir().expect("failed to create data root");
+        let sentinel_path = root.path().join(OFFSET_STORE_DIR);
+
+        std::fs::write(&sentinel_path, sentinal_data).expect("failed to write sentinal file");
+
+        let store = OffsetStore::new(root.path());
+        let group = ConsumerGroupName::new("fraud-detector".to_string())
+            .expect("failed to create consumer group name");
+        let topic = TopicName::new("orders".to_string()).expect("failed to create topic name");
+
+        let error = store
+            .commit_offset(&group, &topic, 0, 42)
+            .expect_err("should fail to commit");
+
+        assert!(
+            matches!(error, OffsetStoreError::UnsafePath { path } if path == sentinel_path),
+            "error must match"
+        );
+        assert_eq!(
+            std::fs::read(&sentinel_path).expect("failed to read sentinel file"),
+            sentinal_data,
+            "sentinel in file should not have chnaged"
+        );
+
+        let group_path = sentinel_path.join(group.as_str());
+        assert!(
+            !group_path.exists(),
+            "consumer group data should not have been created"
+        );
     }
 }
