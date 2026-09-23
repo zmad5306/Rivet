@@ -447,16 +447,120 @@ mod tests {
 
     #[test]
     fn commit_offset_persists_first_forward_and_idempotent_values() {
-        // TODO: Create a temporary data root, an `OffsetStore`, validated group
-        // `fraud-detector`, and validated topic `orders`; derive partition 0's final
-        // offset path through `offset_path` without creating its parent directories.
-        // TODO: Commit next offset 42, verify lookup returns `Some(42)`, and verify
-        // the final file contains exactly the canonical bytes `42`.
-        // TODO: Commit 42 again, verify the idempotent call succeeds, and verify the
-        // final file and lookup result remain exactly `42` with no sibling `.tmp` file.
-        // TODO: Commit the forward value 43, verify lookup returns `Some(43)`, and
-        // verify the final file now contains exactly the canonical bytes `43` with no
-        // sibling `.tmp` file left behind.
+        let root = tempfile::tempdir().expect("failed to create temporary root");
+        let offset_store = OffsetStore::new(root.path());
+        let fraud_detector_group_name = ConsumerGroupName::new("fraud-detector".to_string())
+            .expect("should succeed for valid group name");
+        let orders_topic_name =
+            TopicName::new("orders".to_string()).expect("should succeed for valid topic name");
+        let final_offset_path = offset_store
+            .offset_path(&fraud_detector_group_name, &orders_topic_name, 0)
+            .expect("should succeed for valid partition id 0");
+
+        offset_store
+            .commit_offset(&fraud_detector_group_name, &orders_topic_name, 0, 42)
+            .expect("failed to commit offset");
+
+        assert_eq!(
+            offset_store
+                .get_committed_offset(&fraud_detector_group_name, &orders_topic_name, 0)
+                .expect("failed to get committed offset")
+                .expect("no committed offset found"),
+            42
+        );
+        assert_eq!(
+            std::fs::read(&final_offset_path).expect("failed to read final offset file"),
+            b"42".to_vec(),
+            "final offset file should contain the committed offset 42"
+        );
+
+        offset_store
+            .commit_offset(&fraud_detector_group_name, &orders_topic_name, 0, 42)
+            .expect("failed to commit offset");
+
+        assert_eq!(
+            std::fs::read(&final_offset_path).expect("failed to read final offset file"),
+            b"42".to_vec(),
+            "final offset file should still contain the committed offset 42"
+        );
+        assert_eq!(
+            offset_store
+                .get_committed_offset(&fraud_detector_group_name, &orders_topic_name, 0)
+                .expect("failed to get committed offset")
+                .expect("no committed offset found"),
+            42
+        );
+
+        let files = std::fs::read_dir(
+            final_offset_path
+                .parent()
+                .expect("failed to get parent directory"),
+        )
+        .expect("failed to list files in offset path");
+        let mut asserted = false;
+        for file in files {
+            let file = file.expect("failed to read file in offset path");
+            let file_name = file.file_name();
+            let file_name = file_name
+                .to_str()
+                .expect("failed to convert file name to string");
+            assert!(
+                !file_name.ends_with(".tmp"),
+                "temporary offset file should not exist without a sibling `.tmp` file"
+            );
+            asserted = true;
+        }
+        assert!(asserted, "no files were found in the offset path");
+
+        offset_store
+            .commit_offset(&fraud_detector_group_name, &orders_topic_name, 0, 43)
+            .expect("failed to commit offset");
+
+        assert_eq!(
+            offset_store
+                .get_committed_offset(&fraud_detector_group_name, &orders_topic_name, 0)
+                .expect("failed to get committed offset")
+                .expect("no committed offset found"),
+            43
+        );
+        assert_eq!(
+            std::fs::read(&final_offset_path).expect("failed to read final offset file"),
+            b"43".to_vec(),
+            "final offset file should now contain the committed offset 43"
+        );
+
+        let files = std::fs::read_dir(
+            final_offset_path
+                .parent()
+                .expect("failed to get parent directory"),
+        )
+        .expect("failed to list files in offset path");
+        let mut asserted = false;
+        for file in files {
+            let file = file.expect("failed to read file in offset path");
+            let file_name = file.file_name();
+            let file_name = file_name
+                .to_str()
+                .expect("failed to convert file name to string");
+            assert!(
+                !file_name.ends_with(".tmp"),
+                "temporary offset file should not exist without a sibling `.tmp` file"
+            );
+            asserted = true;
+        }
+        assert!(asserted, "no files were found in the offset path");
+    }
+
+    #[test]
+    fn commit_offset_rejects_rewind_and_preserves_committed_value() {
+        // TODO: Create a temporary `OffsetStore` with validated group
+        // `fraud-detector` and topic `orders`, then commit next offset 43 to
+        // partition 0 as the established consumer position.
+        // TODO: Attempt to commit the lower next offset 42 and verify the exact
+        // typed rewind error reports current 43 and requested 42.
+        // TODO: Read the committed offset through `get_committed_offset` and the
+        // final offset file through `offset_path`; verify both still contain 43
+        // and that no sibling filename ends in `.tmp`.
         todo!()
     }
 }
