@@ -733,4 +733,20 @@ mod tests {
             "consumer group data should not have been created"
         );
     }
+
+    #[test]
+    fn commit_offset_rejects_file_at_group_directory_path() {
+        // TODO: Create a temporary `OffsetStore` and validated identities for
+        // groups `analytics` and `fraud-detector` plus topic `orders`; commit an
+        // offset for `analytics` to establish unrelated durable state.
+        // TODO: Derive `fraud-detector`'s would-be group directory beneath
+        // `root.path().join(OFFSET_STORE_DIR)`, write sentinel bytes there as a
+        // regular file, and leave the `orders` path beneath it absent.
+        // TODO: Attempt a commit for `fraud-detector`/`orders` and verify the exact
+        // typed unsafe-path error identifies the conflicting group path.
+        // TODO: Verify the conflicting file retains its sentinel bytes, no topic
+        // or final-offset path was published beneath it, and the earlier
+        // `analytics` committed offset remains readable and unchanged.
+        todo!()
+    }
 }
