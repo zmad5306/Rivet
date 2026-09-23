@@ -370,6 +370,15 @@ impl std::error::Error for OffsetStoreError {
     }
 }
 
+impl From<std::io::Error> for OffsetStoreError {
+    fn from(source: std::io::Error) -> Self {
+        OffsetStoreError::Io {
+            path: PathBuf::new(),
+            source,
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum CatalogEntryErrorReason {
     InvalidTopicName,

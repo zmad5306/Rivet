@@ -1,8 +1,13 @@
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use super::{ConsumerGroupName, OFFSET_STORE_DIR};
 use crate::broker::topic::TopicName;
 use crate::error::OffsetStoreError;
+
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug)]
 pub(crate) struct OffsetStore {
@@ -77,6 +82,145 @@ impl OffsetStore {
         };
 
         Ok(Some(offset))
+    }
+
+    fn ensure_real_directory(path: &Path) -> Result<(), OffsetStoreError> {
+        match std::fs::create_dir(path) {
+            Ok(_) => Ok(()),
+            Err(source) => {
+                if source.kind() == std::io::ErrorKind::AlreadyExists {
+                    match std::fs::symlink_metadata(path) {
+                        Ok(metadata) => {
+                            let file_type = metadata.file_type();
+                            if !file_type.is_dir() || file_type.is_symlink() {
+                                return Err(OffsetStoreError::UnsafePath {
+                                    path: path.to_path_buf(),
+                                });
+                            }
+                            Ok(())
+                        }
+                        Err(source) => {
+                            return Err(OffsetStoreError::Io {
+                                source,
+                                path: path.to_path_buf(),
+                            });
+                        }
+                    }
+                } else {
+                    Err(OffsetStoreError::Io {
+                        source,
+                        path: path.to_path_buf(),
+                    })
+                }
+            }
+        }
+    }
+
+    fn sync_directory(path: &Path) -> Result<(), OffsetStoreError> {
+        #[cfg(unix)]
+        {
+            match std::fs::File::open(path) {
+                Ok(file) => match file.sync_all() {
+                    Ok(_) => {}
+                    Err(source) => {
+                        return Err(OffsetStoreError::Io {
+                            source,
+                            path: path.to_path_buf(),
+                        });
+                    }
+                },
+                Err(source) => {
+                    return Err(OffsetStoreError::Io {
+                        source,
+                        path: path.to_path_buf(),
+                    });
+                }
+            }
+        }
+
+        #[cfg(windows)]
+        {
+            // Stable Rust does not expose the directory-handle semantics needed to
+            // durably sync this renamed directory entry on Windows. The offset file
+            // contents are synced before publication, but power-loss durability of
+            // the rename itself is not guaranteed.
+            let _ = path;
+        }
+
+        Ok(())
+    }
+
+    pub(crate) fn commit_offset(
+        &self,
+        group: &ConsumerGroupName,
+        topic: &TopicName,
+        partition: u32,
+        next_offset: u64,
+    ) -> Result<(), OffsetStoreError> {
+        let path = self.offset_path(group, topic, partition)?;
+
+        Self::ensure_real_directory(&self.root)?;
+
+        let group_dir = self.root.join(group.as_str());
+        Self::ensure_real_directory(&group_dir)?;
+
+        let topic_dir = group_dir.join(topic.as_str());
+        Self::ensure_real_directory(&topic_dir)?;
+
+        debug_assert!(path.parent() == Some(topic_dir.as_path()));
+
+        let process_id = std::process::id();
+        let (temp_path, mut temp_file) = loop {
+            let counter = COUNTER.fetch_add(1, Ordering::Relaxed);
+            let tmp_path = topic_dir.join(format!("0.offset.{}.{}.tmp", process_id, counter));
+
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&tmp_path)
+            {
+                Ok(file) => {
+                    break (tmp_path, file);
+                }
+                Err(source) => {
+                    if source.kind() == std::io::ErrorKind::AlreadyExists {
+                        continue;
+                    }
+                    return Err(OffsetStoreError::Io {
+                        source,
+                        path: tmp_path.clone(),
+                    });
+                }
+            }
+        };
+
+        let next_offset_canonical = next_offset.to_string();
+        let write_result = (|| -> std::io::Result<()> {
+            temp_file.write_all(next_offset_canonical.as_bytes())?;
+            temp_file.flush()?;
+            temp_file.sync_data()?;
+            Ok(())
+        })();
+
+        drop(temp_file);
+
+        if let Err(source) = write_result {
+            let _ = std::fs::remove_file(&temp_path);
+            return Err(OffsetStoreError::Io {
+                source,
+                path: temp_path,
+            });
+        } else {
+            let rename_result = std::fs::rename(&temp_path, &path);
+            if let Err(source) = rename_result {
+                let _ = std::fs::remove_file(&temp_path);
+                return Err(OffsetStoreError::Io { source, path });
+            }
+        }
+
+        Self::sync_directory(&topic_dir)?;
+
+        todo!()
     }
 }
 
@@ -243,15 +387,46 @@ mod tests {
 
     #[test]
     fn committed_offset_lookup_ignores_leftover_temporary_file() {
-        // TODO: Create a temporary data root, an `OffsetStore`, validated group
-        // `fraud-detector`, and validated topic `orders`; derive partition 0's final
-        // offset path through `offset_path` and create only its parent directories.
-        // TODO: Create a sibling temporary file whose name is the final filename plus
-        // `.tmp`, containing canonical bytes `43`; with no final offset file present,
-        // verify lookup returns `None` and leaves the temporary file unchanged.
-        // TODO: Write canonical bytes `42` to the final offset file, look up the same
-        // identity again, and verify the final file remains authoritative as `Some(42)`
-        // while the sibling temporary file still exists unchanged.
-        todo!()
+        let root = tempfile::tempdir().expect("failed to create temporary root");
+        let data_root = root.path().join("data");
+        let offset_store = OffsetStore::new(&data_root);
+        let fraud_detector_group_name = ConsumerGroupName::new("fraud-detector".to_string())
+            .expect("should succeed for valid group name");
+        let orders_topic_name =
+            TopicName::new("orders".to_string()).expect("should succeed for valid topic name");
+        let final_offset_path = offset_store
+            .offset_path(&fraud_detector_group_name, &orders_topic_name, 0)
+            .expect("should succeed for valid partition id 0");
+        let parent = final_offset_path
+            .parent()
+            .expect("final offset path has no parent directory");
+
+        std::fs::create_dir_all(parent)
+            .expect("failed to create parent directories for final offset file");
+
+        let temp_offset_path = final_offset_path.with_extension("offset.tmp");
+        std::fs::write(&temp_offset_path, b"43").expect("failed to write temporary offset file");
+
+        let result =
+            offset_store.get_committed_offset(&fraud_detector_group_name, &orders_topic_name, 0);
+        assert!(matches!(result, Ok(None)));
+
+        let temp_contents =
+            std::fs::read(&temp_offset_path).expect("failed to read temporary offset file");
+        assert_eq!(temp_contents, b"43");
+
+        std::fs::write(&final_offset_path, b"42").expect("failed to write final offset file");
+
+        let result =
+            offset_store.get_committed_offset(&fraud_detector_group_name, &orders_topic_name, 0);
+        assert!(matches!(result, Ok(Some(42))));
+
+        let temp_contents =
+            std::fs::read(&temp_offset_path).expect("failed to read temporary offset file");
+        assert_eq!(temp_contents, b"43");
+
+        let final_contents =
+            std::fs::read(&final_offset_path).expect("failed to read final offset file");
+        assert_eq!(final_contents, b"42");
     }
 }
