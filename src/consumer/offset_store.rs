@@ -169,6 +169,21 @@ impl OffsetStore {
 
         debug_assert!(path.parent() == Some(topic_dir.as_path()));
 
+        match self.get_committed_offset(group, topic, partition)? {
+            Some(current) if current > next_offset => {
+                return Err(OffsetStoreError::Rewind {
+                    current,
+                    requested: next_offset,
+                });
+            }
+            Some(current) if current == next_offset => {
+                return Ok(());
+            }
+            Some(_) | None => {
+                // Do nothing; execution continues to temporary-file creation.
+            }
+        }
+
         let process_id = std::process::id();
         let (temp_path, mut temp_file) = loop {
             let counter = COUNTER.fetch_add(1, Ordering::Relaxed);
@@ -220,7 +235,7 @@ impl OffsetStore {
 
         Self::sync_directory(&topic_dir)?;
 
-        todo!()
+        Ok(())
     }
 }
 
@@ -428,5 +443,20 @@ mod tests {
         let final_contents =
             std::fs::read(&final_offset_path).expect("failed to read final offset file");
         assert_eq!(final_contents, b"42");
+    }
+
+    #[test]
+    fn commit_offset_persists_first_forward_and_idempotent_values() {
+        // TODO: Create a temporary data root, an `OffsetStore`, validated group
+        // `fraud-detector`, and validated topic `orders`; derive partition 0's final
+        // offset path through `offset_path` without creating its parent directories.
+        // TODO: Commit next offset 42, verify lookup returns `Some(42)`, and verify
+        // the final file contains exactly the canonical bytes `42`.
+        // TODO: Commit 42 again, verify the idempotent call succeeds, and verify the
+        // final file and lookup result remain exactly `42` with no sibling `.tmp` file.
+        // TODO: Commit the forward value 43, verify lookup returns `Some(43)`, and
+        // verify the final file now contains exactly the canonical bytes `43` with no
+        // sibling `.tmp` file left behind.
+        todo!()
     }
 }
