@@ -273,7 +273,7 @@ data/
         0.offset
 ```
 
-The file contains the next offset as text, such as `43`. Updates are atomic: write a temporary file, sync it, and atomically rename it. The implementation must also consider the durability of the containing directory entry.
+The file contains the next offset in canonical unsigned decimal form, such as `43`: ASCII digits only, no sign, whitespace, newline, or leading zeroes, except that zero is represented as `0`. Updates are atomic: write a temporary file, sync it, and atomically rename it. The implementation must also consider the durability of the containing directory entry.
 
 Updating one consumer group must never affect another.
 

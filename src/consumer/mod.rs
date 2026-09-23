@@ -1,4 +1,8 @@
+mod offset_store;
+
 use crate::error::ConsumerGroupNameError;
+
+pub(crate) const OFFSET_STORE_DIR: &str = "__consumer_offsets";
 
 #[derive(Debug, PartialEq, Eq, Clone, PartialOrd, Ord)]
 pub(crate) struct ConsumerGroupName {

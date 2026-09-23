@@ -324,6 +324,9 @@ pub enum OffsetStoreError {
     UnsafePath {
         path: PathBuf,
     },
+    UnsupportedPartitionId {
+        requested: u32,
+    },
 }
 
 impl std::fmt::Display for OffsetStoreError {
@@ -346,6 +349,11 @@ impl std::fmt::Display for OffsetStoreError {
             OffsetStoreError::UnsafePath { path } => {
                 write!(f, "unsafe consumer offset path at {}", path.display())
             }
+            OffsetStoreError::UnsupportedPartitionId { requested } => write!(
+                f,
+                "unsupported partition id: {}, only partition id 0 is supported",
+                requested
+            ),
         }
     }
 }
@@ -357,6 +365,7 @@ impl std::error::Error for OffsetStoreError {
             OffsetStoreError::Io { source, .. } => Some(source),
             OffsetStoreError::MalformedOffset { .. } => None,
             OffsetStoreError::UnsafePath { .. } => None,
+            OffsetStoreError::UnsupportedPartitionId { .. } => None,
         }
     }
 }
@@ -505,8 +514,9 @@ impl From<TopicNameError> for TopicError {
 
 #[cfg(test)]
 mod tests {
-    use crate::error::{
-        CatalogEntryErrorReason, CodecError, PartitionError, StorageError, TopicError,
+    use crate::{
+        consumer::OFFSET_STORE_DIR,
+        error::{CatalogEntryErrorReason, CodecError, PartitionError, StorageError, TopicError},
     };
     use std::{error::Error, path::PathBuf};
 
@@ -1137,7 +1147,7 @@ mod tests {
 
     #[test]
     fn unsafe_offset_path_error_retains_path_and_has_no_source() {
-        let path: PathBuf = "__consumer_offsets/fraud-detector".into();
+        let path: PathBuf = format!("{}/fraud-detector", OFFSET_STORE_DIR).into();
         let error = super::OffsetStoreError::UnsafePath { path: path.clone() };
 
         assert!(matches!(

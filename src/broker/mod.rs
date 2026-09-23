@@ -3,6 +3,7 @@ pub mod topic;
 
 use self::topic::Topic;
 use crate::broker::topic::{TopicName, validate_partition_count};
+use crate::consumer::OFFSET_STORE_DIR;
 use crate::error::{CatalogEntryErrorReason, TopicError};
 use crate::storage::record::{PublishInput, Record};
 use crate::storage::{record::RecordLimits, segment::SegmentConfig};
@@ -47,6 +48,11 @@ impl Broker {
         let mut topics = BTreeMap::new();
         for read_result in std::fs::read_dir(&data_root)? {
             let entry = read_result?;
+            let file_name = entry.file_name();
+
+            if file_name == OFFSET_STORE_DIR {
+                continue;
+            }
 
             if entry.file_type()?.is_symlink() {
                 return Err(TopicError::UnexpectedCatalogEntry {
@@ -62,12 +68,13 @@ impl Broker {
                 });
             }
 
-            let file_name = entry.file_name().into_string().map_err(|_| {
-                TopicError::UnexpectedCatalogEntry {
-                    path: entry.path(),
-                    reason: CatalogEntryErrorReason::InvalidTopicName,
-                }
-            })?;
+            let file_name =
+                file_name
+                    .into_string()
+                    .map_err(|_| TopicError::UnexpectedCatalogEntry {
+                        path: entry.path(),
+                        reason: CatalogEntryErrorReason::InvalidTopicName,
+                    })?;
 
             let topic_name =
                 TopicName::new(file_name).map_err(|_| TopicError::UnexpectedCatalogEntry {
@@ -1236,6 +1243,35 @@ mod tests {
         assert!(
             payment_1_none.is_none(),
             "expected no second payment record"
+        );
+    }
+
+    #[test]
+    fn opening_a_broker_ignores_the_reserved_consumer_offset_directory() {
+        let data_root = tempfile::tempdir().expect("failed to create temporary data root");
+        let consumer_offsets_dir = data_root.path().join("__consumer_offsets");
+        let consumer_offsets_fraud_detector_dir = consumer_offsets_dir.join("fraud-detector");
+        std::fs::create_dir_all(&consumer_offsets_fraud_detector_dir)
+            .expect("failed to create nested consumer offsets directory");
+
+        let broker = Broker::open(
+            data_root.path().to_path_buf(),
+            SegmentConfig::default(),
+            RecordLimits::default(),
+        )
+        .expect("failed to create broker");
+
+        assert!(
+            broker.list_topics().is_empty(),
+            "expected no topics to be listed"
+        );
+        assert!(
+            consumer_offsets_dir.exists(),
+            "expected the reserved consumer offsets directory to still exist"
+        );
+        assert!(
+            consumer_offsets_fraud_detector_dir.exists(),
+            "expected the nested group directory to still exist"
         );
     }
 
