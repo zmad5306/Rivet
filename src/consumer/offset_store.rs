@@ -34,6 +34,12 @@ impl OffsetStore {
             .join(format!("{}.offset", partition)))
     }
 
+    /// Reads committed state only from the final `<partition>.offset` path.
+    ///
+    /// Sibling temporary artifacts are uncommitted state and are ignored. Lookup
+    /// is read-only: it neither removes temporary artifacts nor creates files or
+    /// directories. Cleanup, when safe and necessary, belongs to the operation
+    /// that owns the temporary artifact.
     pub(crate) fn get_committed_offset(
         &self,
         group: &ConsumerGroupName,
@@ -157,13 +163,95 @@ mod tests {
 
     #[test]
     fn committed_offset_lookup_parses_zero_and_u64_max() {
+        let root = tempfile::tempdir().expect("failed to create temporary data root");
+        let data_root = root.path().join("data");
+        let offset_store = OffsetStore::new(&data_root);
+        let fraud_detector_group_name = ConsumerGroupName::new("fraud-detector".to_string())
+            .expect("should succeed for valid group name");
+        let orders_topic_name =
+            TopicName::new("orders".to_string()).expect("should succeed for valid topic name");
+        let final_offset_path = offset_store
+            .offset_path(&fraud_detector_group_name, &orders_topic_name, 0)
+            .expect("should succeed for valid partition id 0");
+        let parent = final_offset_path
+            .parent()
+            .expect("final offset path has no parent directory");
+
+        std::fs::create_dir_all(parent)
+            .expect("failed to create parent directories for final offset file");
+        std::fs::write(&final_offset_path, b"0").expect("failed to write initial offset value");
+
+        assert_eq!(
+            offset_store
+                .get_committed_offset(&fraud_detector_group_name, &orders_topic_name, 0)
+                .expect("should succeed for valid partition id 0"),
+            Some(0),
+            "committed offset for partition 0 should be 0"
+        );
+
+        std::fs::write(&final_offset_path, u64::MAX.to_string().as_bytes())
+            .expect("failed to write maximum offset value");
+        assert_eq!(
+            offset_store
+                .get_committed_offset(&fraud_detector_group_name, &orders_topic_name, 0)
+                .expect("should succeed for valid partition id 0"),
+            Some(u64::MAX),
+            "committed offset for partition 0 should be u64::MAX"
+        );
+    }
+
+    #[test]
+    fn committed_offset_lookup_rejects_noncanonical_and_malformed_contents() {
+        let root = tempfile::tempdir().expect("failed to create temporary root");
+        let data_root = root.path().join("data");
+        let offset_store = OffsetStore::new(&data_root);
+        let fraud_detector_group_name = ConsumerGroupName::new("fraud-detector".to_string())
+            .expect("should succeed for valid group name");
+        let orders_topic_name =
+            TopicName::new("orders".to_string()).expect("should succeed for valid topic name");
+        let final_offset_path = offset_store
+            .offset_path(&fraud_detector_group_name, &orders_topic_name, 0)
+            .expect("should succeed for valid partition id 0");
+        let parent = final_offset_path
+            .parent()
+            .expect("final offset path has no parent directory");
+
+        std::fs::create_dir_all(parent)
+            .expect("failed to create parent directories for final offset file");
+
+        let fixtures: &[&[u8]] = &[
+            b"",                     // empty bytes
+            b"abc",                  // non-decimal bytes
+            b"18446744073709551616", // overflow bytes (u64::MAX + 1)
+            b"1\n",                  // trailing-junk bytes
+            b"01",                   // noncanonical leading-zero bytes
+        ];
+
+        for fixture in fixtures.iter() {
+            std::fs::write(&final_offset_path, fixture)
+                .expect("failed to write fixture to final offset file");
+            let result = offset_store.get_committed_offset(
+                &fraud_detector_group_name,
+                &orders_topic_name,
+                0,
+            );
+            assert!(
+                matches!(result, Err(OffsetStoreError::MalformedOffset { path }) if path == final_offset_path)
+            );
+        }
+    }
+
+    #[test]
+    fn committed_offset_lookup_ignores_leftover_temporary_file() {
         // TODO: Create a temporary data root, an `OffsetStore`, validated group
         // `fraud-detector`, and validated topic `orders`; derive partition 0's final
         // offset path through `offset_path` and create only its parent directories.
-        // TODO: Write the exact bytes `0` to the final offset file, look up partition
-        // 0, and verify the result is `Some(0)` rather than missing state.
-        // TODO: Replace the file contents with `u64::MAX.to_string()`, look up the same
-        // identity again, and verify the result is `Some(u64::MAX)`.
+        // TODO: Create a sibling temporary file whose name is the final filename plus
+        // `.tmp`, containing canonical bytes `43`; with no final offset file present,
+        // verify lookup returns `None` and leaves the temporary file unchanged.
+        // TODO: Write canonical bytes `42` to the final offset file, look up the same
+        // identity again, and verify the final file remains authoritative as `Some(42)`
+        // while the sibling temporary file still exists unchanged.
         todo!()
     }
 }
