@@ -788,17 +788,74 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn commit_offset_rejects_symlink_at_group_directory_path() {
-        // TODO: Create a temporary `OffsetStore`, validated group
-        // `fraud-detector`, and validated topic `orders`; also create a separate
-        // real directory inside the temporary root to serve as the symlink target.
-        // TODO: Create the reserved offset-store directory, then use
-        // `std::os::unix::fs::symlink` to place a group-path symlink named
-        // `fraud-detector` beneath it that points to the separate real directory.
-        // TODO: Attempt a partition-0 commit and verify the exact typed unsafe-path
-        // error identifies the group-path symlink rather than following it.
-        // TODO: Verify the symlink and its real target remain intact, and verify no
-        // `orders` directory, final offset, or temporary artifact was created in
-        // the target directory.
+        let data_root = tempfile::tempdir().expect("failed to create data root");
+        let symlink_target = data_root.path().join("target");
+
+        std::fs::create_dir(&symlink_target).expect("failed to create symlink target");
+
+        let fraud_detector_consumer_group = ConsumerGroupName::new("fraud-detector".to_string())
+            .expect("failed to create fraud detector consumer group name");
+        let orders_topic =
+            TopicName::new("orders".to_string()).expect("failed to create orders topic name");
+
+        let offset_store = OffsetStore::new(data_root.path());
+
+        let offset_store_dir = data_root.path().join(OFFSET_STORE_DIR);
+        let fraud_detection_dir = offset_store_dir
+            .as_path()
+            .join(fraud_detector_consumer_group.as_str());
+
+        std::fs::create_dir(offset_store_dir).expect("failed to create offset store dir");
+        std::os::unix::fs::symlink(&symlink_target, &fraud_detection_dir)
+            .expect("failed to create symlink");
+
+        let error = offset_store
+            .commit_offset(&fraud_detector_consumer_group, &orders_topic, 0, 32)
+            .expect_err("should have failed to commit");
+        let orders_path = symlink_target.join(orders_topic.as_str());
+        let final_offset_path = orders_path.join("0.offset");
+        let metadata =
+            std::fs::symlink_metadata(&fraud_detection_dir).expect("failed to get metadata");
+        let mut target_entries =
+            std::fs::read_dir(&symlink_target).expect("failed to read symlink targent");
+
+        assert!(
+            matches!(error, OffsetStoreError::UnsafePath { path } if path == fraud_detection_dir),
+            "unexpected error shape"
+        );
+        assert!(symlink_target.exists(), "missing symlink target");
+        assert!(fraud_detection_dir.exists(), "missing symlink");
+        assert!(
+            metadata.file_type().is_symlink(),
+            "fraud detection consumer group dir should have been a symlink"
+        );
+        assert!(
+            !orders_path.exists(),
+            "should not have followed symlink and created offset dir"
+        );
+        assert!(
+            !final_offset_path.exists(),
+            "should not have followed symlink and created an offset file"
+        );
+        assert!(
+            target_entries.next().is_none(),
+            "symlink target should contain no created artifacts"
+        );
+    }
+
+    #[test]
+    fn commit_offset_prepublication_failure_preserves_prior_value() {
+        // TODO: Create a temporary `OffsetStore` with validated group
+        // `fraud-detector` and topic `orders`, then successfully commit 42 as the
+        // prior durable value.
+        // TODO: Configure the offset store's narrow filesystem test seam to fail
+        // one forward commit after its uniquely owned temporary file is created
+        // but before that file is published to the final path.
+        // TODO: Attempt to commit 43 and verify the returned typed I/O error keeps
+        // the failing operation and path context without being masked by cleanup.
+        // TODO: Verify lookup and final-file bytes still report 42, the failed
+        // operation's temporary file was removed, and no unrelated sibling
+        // temporary artifact was removed.
         todo!()
     }
 }
