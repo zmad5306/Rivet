@@ -736,17 +736,69 @@ mod tests {
 
     #[test]
     fn commit_offset_rejects_file_at_group_directory_path() {
-        // TODO: Create a temporary `OffsetStore` and validated identities for
-        // groups `analytics` and `fraud-detector` plus topic `orders`; commit an
-        // offset for `analytics` to establish unrelated durable state.
-        // TODO: Derive `fraud-detector`'s would-be group directory beneath
-        // `root.path().join(OFFSET_STORE_DIR)`, write sentinel bytes there as a
-        // regular file, and leave the `orders` path beneath it absent.
-        // TODO: Attempt a commit for `fraud-detector`/`orders` and verify the exact
-        // typed unsafe-path error identifies the conflicting group path.
-        // TODO: Verify the conflicting file retains its sentinel bytes, no topic
-        // or final-offset path was published beneath it, and the earlier
-        // `analytics` committed offset remains readable and unchanged.
+        let data_root = tempfile::tempdir().expect("failed to create data root");
+        let analytics_consumer_group = ConsumerGroupName::new("analytics".to_string())
+            .expect("failed to create analytics consumer group name");
+        let fraud_detector_consumer_group = ConsumerGroupName::new("fraud-detector".to_string())
+            .expect("failed to create fraud detector consumer group name");
+        let orders_topic =
+            TopicName::new("orders".to_string()).expect("failed to create orders topic name");
+
+        let offset_store = OffsetStore::new(data_root.path());
+
+        offset_store
+            .commit_offset(&analytics_consumer_group, &orders_topic, 0, 57)
+            .expect("commit offset failed");
+
+        let sentinal_data = b"sentinal-data";
+        let sentinel_path = data_root
+            .path()
+            .join(OFFSET_STORE_DIR)
+            .join(fraud_detector_consumer_group.as_str());
+
+        std::fs::write(&sentinel_path, sentinal_data).expect("failed to write sentinal file");
+
+        let error = offset_store
+            .commit_offset(&fraud_detector_consumer_group, &orders_topic, 0, 32)
+            .expect_err("write should faile when offset dir is a file");
+
+        assert!(
+            matches!(error, OffsetStoreError::UnsafePath { path } if path == sentinel_path),
+            "found unexpected error shape"
+        );
+        assert_eq!(
+            std::fs::read(&sentinel_path).expect("failed to read sentinel file"),
+            sentinal_data,
+            "sentinel in file should not have chnaged"
+        );
+
+        let topic_path = sentinel_path.join(orders_topic.as_str());
+        assert!(!topic_path.exists(), "topic data should not exist");
+
+        let analytics_committed_offset = offset_store
+            .get_committed_offset(&analytics_consumer_group, &orders_topic, 0)
+            .expect("failed to get committed offset")
+            .expect("comitted offset not populated");
+        assert_eq!(
+            analytics_committed_offset, 57,
+            "commited offset should not have changed"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn commit_offset_rejects_symlink_at_group_directory_path() {
+        // TODO: Create a temporary `OffsetStore`, validated group
+        // `fraud-detector`, and validated topic `orders`; also create a separate
+        // real directory inside the temporary root to serve as the symlink target.
+        // TODO: Create the reserved offset-store directory, then use
+        // `std::os::unix::fs::symlink` to place a group-path symlink named
+        // `fraud-detector` beneath it that points to the separate real directory.
+        // TODO: Attempt a partition-0 commit and verify the exact typed unsafe-path
+        // error identifies the group-path symlink rather than following it.
+        // TODO: Verify the symlink and its real target remain intact, and verify no
+        // `orders` directory, final offset, or temporary artifact was created in
+        // the target directory.
         todo!()
     }
 }
