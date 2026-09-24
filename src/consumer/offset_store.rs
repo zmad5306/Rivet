@@ -9,15 +9,39 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 static COUNTER: AtomicU64 = AtomicU64::new(0);
 
+type PublishOperation = fn(&Path, &Path) -> std::io::Result<()>;
+
 #[derive(Debug)]
 pub(crate) struct OffsetStore {
     root: PathBuf,
+    publish_operation: PublishOperation,
+}
+
+fn publish(temp_path: &Path, path: &Path) -> std::io::Result<()> {
+    std::fs::rename(&temp_path, &path)
+}
+
+#[cfg(test)]
+fn publish_with_failure(_: &Path, _: &Path) -> std::io::Result<()> {
+    Err(std::io::Error::other("injected pre-publication failure"))
 }
 
 impl OffsetStore {
     pub(crate) fn new(data_root: &Path) -> Self {
         let root = data_root.join(OFFSET_STORE_DIR);
-        Self { root }
+        Self {
+            root,
+            publish_operation: publish,
+        }
+    }
+
+    #[cfg(test)]
+    fn new_with_publish_operation(data_root: &Path, publish_operation: PublishOperation) -> Self {
+        let root = data_root.join(OFFSET_STORE_DIR);
+        Self {
+            root,
+            publish_operation: publish_operation,
+        }
     }
 
     pub(crate) fn offset_path(
@@ -226,7 +250,7 @@ impl OffsetStore {
                 path: temp_path,
             });
         } else {
-            let rename_result = std::fs::rename(&temp_path, &path);
+            let rename_result = (self.publish_operation)(&temp_path, &path);
             if let Err(source) = rename_result {
                 let _ = std::fs::remove_file(&temp_path);
                 return Err(OffsetStoreError::Io { source, path });
@@ -245,7 +269,10 @@ mod tests {
 
     use crate::{
         broker::topic::TopicName,
-        consumer::{ConsumerGroupName, OFFSET_STORE_DIR, offset_store::OffsetStore},
+        consumer::{
+            ConsumerGroupName, OFFSET_STORE_DIR,
+            offset_store::{OffsetStore, publish_with_failure},
+        },
         error::OffsetStoreError,
     };
 
@@ -845,17 +872,86 @@ mod tests {
 
     #[test]
     fn commit_offset_prepublication_failure_preserves_prior_value() {
-        // TODO: Create a temporary `OffsetStore` with validated group
-        // `fraud-detector` and topic `orders`, then successfully commit 42 as the
-        // prior durable value.
-        // TODO: Configure the offset store's narrow filesystem test seam to fail
-        // one forward commit after its uniquely owned temporary file is created
-        // but before that file is published to the final path.
-        // TODO: Attempt to commit 43 and verify the returned typed I/O error keeps
-        // the failing operation and path context without being masked by cleanup.
-        // TODO: Verify lookup and final-file bytes still report 42, the failed
-        // operation's temporary file was removed, and no unrelated sibling
-        // temporary artifact was removed.
-        todo!()
+        let data_root = tempfile::tempdir().expect("failed to create temporary data root");
+        let fraud_detector_consumer_group = ConsumerGroupName::new("fraud-detector".to_string())
+            .expect("should accept valid fraud-detector consumer group name");
+        let orders_topic =
+            TopicName::new("orders".to_string()).expect("should accept valid orders topic name");
+
+        let offset_store = OffsetStore::new(data_root.path());
+
+        let final_offset_path = offset_store
+            .offset_path(&fraud_detector_consumer_group, &orders_topic, 0)
+            .expect("should derive final offset path for supported partition 0");
+
+        offset_store
+            .commit_offset(&fraud_detector_consumer_group, &orders_topic, 0, 42)
+            .expect("initial commit of offset 42 should succeed");
+
+        let topic_directory = final_offset_path
+            .parent()
+            .expect("generated final offset path should have a topic directory");
+        let unrelated_temp_path = topic_directory.join("unrelated.tmp");
+        let do_not_touch = b"do-not-touch";
+
+        std::fs::write(&unrelated_temp_path, do_not_touch)
+            .expect("failed to create unrelated sibling temporary artifact");
+
+        let offset_store =
+            OffsetStore::new_with_publish_operation(data_root.path(), publish_with_failure);
+        let error = offset_store
+            .commit_offset(&fraud_detector_consumer_group, &orders_topic, 0, 43)
+            .expect_err("forward commit should fail at injected publication boundary");
+        let file_data = std::fs::read(&final_offset_path)
+            .expect("failed to read prior committed offset after publication failure");
+        let file_entries = std::fs::read_dir(
+            final_offset_path
+                .parent()
+                .expect("generated final offset path should have a topic directory"),
+        )
+        .expect("failed to list topic directory after publication failure");
+        let unrelated_file_data = std::fs::read(unrelated_temp_path)
+            .expect("failed to read unrelated sibling temporary artifact");
+        let offset = offset_store
+            .get_committed_offset(&fraud_detector_consumer_group, &orders_topic, 0)
+            .expect("committed-offset lookup should succeed after publication failure")
+            .expect("prior committed offset should remain present after publication failure");
+
+        assert_eq!(
+            offset, 42,
+            "failed publication should leave the prior committed offset authoritative"
+        );
+        assert!(
+            matches!(error, OffsetStoreError::Io { path, source } if path == final_offset_path && source.kind() == std::io::ErrorKind::Other && source.to_string() == "injected pre-publication failure"),
+            "failed commit should return the injected I/O error with final offset path context"
+        );
+        assert_eq!(
+            file_data, b"42",
+            "failed publication should preserve the prior committed bytes"
+        );
+
+        let mut entry_names = file_entries
+            .map(|entry| {
+                entry
+                    .expect("failed to inspect an entry in the topic directory")
+                    .file_name()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect::<Vec<_>>();
+
+        entry_names.sort();
+
+        assert_eq!(
+            entry_names,
+            vec!["0.offset".to_string(), "unrelated.tmp".to_string()],
+            "failed commit should remove its owned temporary file and preserve unrelated entries"
+        );
+
+        assert_eq!(
+            do_not_touch.to_vec(),
+            unrelated_file_data,
+            "failed-commit cleanup should not modify unrelated temporary-file contents"
+        );
     }
 }
