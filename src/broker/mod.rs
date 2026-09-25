@@ -1587,4 +1587,39 @@ mod tests {
         assert_eq!(record.key().expect("expected a key"), key);
         assert_eq!(record.payload(), payload);
     }
+
+    #[test]
+    fn broker_commit_lookup_and_restart_delegate_for_a_known_topic() {
+        // TODO: Open a Broker on a temporary data root and create the `orders` topic.
+        // TODO: Observe through `get_committed_offset` that group `fraud-detector`, topic
+        // `orders`, partition 0 initially has no committed offset.
+        // TODO: Commit next offset 43 through the Broker API and verify lookup returns 43.
+        // TODO: Drop and reopen the Broker on the same data root, then verify the same public
+        // lookup still returns 43 and `list_topics` contains only `orders`.
+        todo!()
+    }
+
+    #[test]
+    fn broker_rejects_missing_topic_and_unsupported_partition_before_offset_mutation() {
+        // TODO: Open a Broker, then attempt a partition-0 commit for valid group
+        // `fraud-detector` and missing topic `orders`; verify the nested typed error is
+        // `ConsumerError::Topic` containing `TopicError::NotFound` for `orders`.
+        // TODO: Create `orders`, verify its partition-0 committed offset is still None, then
+        // attempt a commit to unsupported partition 1 and verify the nested topic error retains
+        // requested partition 1.
+        // TODO: Verify partition 0 remains None after the rejected partition-1 commit, proving
+        // both Broker-owned rejection paths occurred before offset mutation.
+        todo!()
+    }
+
+    #[test]
+    fn broker_preserves_group_and_topic_offset_isolation_across_restart() {
+        // TODO: Open a Broker and create topics `orders` and `payments`.
+        // TODO: Through Broker APIs, commit distinct next offsets for both `fraud-detector` and
+        // `analytics` on each topic's partition 0; use four distinct values so swapped group or
+        // topic arguments are observable.
+        // TODO: Verify all four lookups return their matching values, drop and reopen the Broker,
+        // and verify the same four public lookups still return the matching values.
+        todo!()
+    }
 }
