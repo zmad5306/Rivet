@@ -1,5 +1,7 @@
 mod offset_store;
 
+pub(crate) use offset_store::OffsetStore;
+
 use crate::error::ConsumerGroupNameError;
 
 pub(crate) const OFFSET_STORE_DIR: &str = "__consumer_offsets";

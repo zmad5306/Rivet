@@ -2,9 +2,9 @@ pub mod partition;
 pub mod topic;
 
 use self::topic::Topic;
-use crate::broker::topic::{TopicName, validate_partition_count};
-use crate::consumer::OFFSET_STORE_DIR;
-use crate::error::{CatalogEntryErrorReason, TopicError};
+use crate::broker::topic::{TopicName, validate_partition_count, validate_partition_id};
+use crate::consumer::{ConsumerGroupName, OFFSET_STORE_DIR, OffsetStore};
+use crate::error::{CatalogEntryErrorReason, ConsumerError, TopicError};
 use crate::storage::record::{PublishInput, Record};
 use crate::storage::{record::RecordLimits, segment::SegmentConfig};
 use std::{collections::BTreeMap, path::PathBuf};
@@ -36,6 +36,7 @@ pub struct Broker {
     topics: BTreeMap<TopicName, Topic>,
     segment_config: SegmentConfig,
     record_limits: RecordLimits,
+    offset_store: OffsetStore,
 }
 
 impl Broker {
@@ -44,6 +45,7 @@ impl Broker {
         segment_config: SegmentConfig,
         record_limits: RecordLimits,
     ) -> Result<Self, TopicError> {
+        let offset_store = OffsetStore::new(&data_root);
         std::fs::create_dir_all(&data_root)?;
         let mut topics = BTreeMap::new();
         for read_result in std::fs::read_dir(&data_root)? {
@@ -97,6 +99,7 @@ impl Broker {
             topics,
             segment_config,
             record_limits,
+            offset_store,
         })
     }
 
@@ -153,6 +156,54 @@ impl Broker {
                 name: topic_name.as_str().to_string(),
             })
         }
+    }
+
+    pub fn commit_offset(
+        &self,
+        group: &str,
+        topic: &str,
+        partition_id: u32,
+        next_offset: u64,
+    ) -> Result<(), ConsumerError> {
+        let consumer_group_name = ConsumerGroupName::new(group.to_string())?;
+        let topic_name = TopicName::new(topic.to_string())?;
+        validate_partition_id(partition_id)?;
+        if !self.topics.contains_key(&topic_name) {
+            return Err(TopicError::NotFound {
+                name: topic_name.as_str().to_string(),
+            }
+            .into());
+        }
+        self.offset_store.commit_offset(
+            &consumer_group_name,
+            &topic_name,
+            partition_id,
+            next_offset,
+        )?;
+        Ok(())
+    }
+
+    pub fn get_committed_offset(
+        &self,
+        group: &str,
+        topic: &str,
+        partition_id: u32,
+    ) -> Result<Option<u64>, ConsumerError> {
+        let consumer_group_name = ConsumerGroupName::new(group.to_string())?;
+        let topic_name = TopicName::new(topic.to_string())?;
+        validate_partition_id(partition_id)?;
+        if !self.topics.contains_key(&topic_name) {
+            return Err(TopicError::NotFound {
+                name: topic_name.as_str().to_string(),
+            }
+            .into());
+        }
+        let offset = self.offset_store.get_committed_offset(
+            &consumer_group_name,
+            &topic_name,
+            partition_id,
+        )?;
+        Ok(offset)
     }
 }
 

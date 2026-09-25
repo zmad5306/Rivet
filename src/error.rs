@@ -572,6 +572,15 @@ impl From<OffsetStoreError> for ConsumerError {
     }
 }
 
+impl From<TopicNameError> for ConsumerError {
+    fn from(source: TopicNameError) -> Self {
+        let topic_error = TopicError::from(source);
+        ConsumerError::Topic {
+            source: topic_error,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::{
