@@ -521,11 +521,65 @@ impl From<TopicNameError> for TopicError {
     }
 }
 
+#[derive(Debug)]
+pub enum ConsumerError {
+    InvalidGroupName { source: ConsumerGroupNameError },
+    Topic { source: TopicError },
+    OffsetStore { source: OffsetStoreError },
+}
+
+impl std::fmt::Display for ConsumerError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ConsumerError::InvalidGroupName { source } => {
+                write!(f, "invalid consumer group name: {}", source)
+            }
+            ConsumerError::Topic { source } => {
+                write!(f, "topic error: {}", source)
+            }
+            ConsumerError::OffsetStore { source } => {
+                write!(f, "offset store error: {}", source)
+            }
+        }
+    }
+}
+
+impl std::error::Error for ConsumerError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            ConsumerError::InvalidGroupName { source } => Some(source),
+            ConsumerError::Topic { source } => Some(source),
+            ConsumerError::OffsetStore { source } => Some(source),
+        }
+    }
+}
+
+impl From<ConsumerGroupNameError> for ConsumerError {
+    fn from(source: ConsumerGroupNameError) -> Self {
+        ConsumerError::InvalidGroupName { source }
+    }
+}
+
+impl From<TopicError> for ConsumerError {
+    fn from(source: TopicError) -> Self {
+        ConsumerError::Topic { source }
+    }
+}
+
+impl From<OffsetStoreError> for ConsumerError {
+    fn from(source: OffsetStoreError) -> Self {
+        ConsumerError::OffsetStore { source }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::{
         consumer::OFFSET_STORE_DIR,
-        error::{CatalogEntryErrorReason, CodecError, PartitionError, StorageError, TopicError},
+        error::{
+            CatalogEntryErrorReason, CodecError, ConsumerError, ConsumerGroupNameError,
+            OffsetStoreError, PartitionError, StorageError, TopicError,
+        },
     };
     use std::{error::Error, path::PathBuf};
 
@@ -1171,6 +1225,99 @@ mod tests {
         assert!(
             error.source().is_none(),
             "expected no source for unsafe path"
+        );
+    }
+
+    #[test]
+    fn consumer_error_wraps_each_boundary_error_without_erasing_its_source() {
+        let invalid_group_name =
+            ConsumerError::from(ConsumerGroupNameError::InvalidCharacter { character: '/' });
+        let topic_error = ConsumerError::from(TopicError::AlreadyExists {
+            name: "orders".to_string(),
+        });
+        let offset_store_error = ConsumerError::from(OffsetStoreError::MalformedOffset {
+            path: "groups/orders/0.offset".into(),
+        });
+
+        let invalid_group_name_source = invalid_group_name
+            .source()
+            .expect("expected source for invalid_group_name")
+            .downcast_ref::<ConsumerGroupNameError>()
+            .expect("expected ConsumerGroupNameError as source for invalid_group_name");
+        let topic_error_source = topic_error
+            .source()
+            .expect("expected source for topic_error")
+            .downcast_ref::<TopicError>()
+            .expect("expected TopicError as source for topic_error");
+        let offset_store_error_source = offset_store_error
+            .source()
+            .expect("expected source for offset_store_error")
+            .downcast_ref::<OffsetStoreError>()
+            .expect("expected OffsetStoreError as source for offset_store_error");
+
+        let invalid_group_name_message = invalid_group_name.to_string();
+        let topic_error_message = topic_error.to_string();
+        let offset_store_error_message = offset_store_error.to_string();
+
+        assert!(
+            matches!(
+                invalid_group_name,
+                ConsumerError::InvalidGroupName { source: _ }
+            ),
+            "expected invalid_group_name to match InvalidGroupName variant"
+        );
+        assert!(
+            matches!(topic_error, ConsumerError::Topic { source: _ }),
+            "expected topic_error to match Topic variant"
+        );
+        assert!(
+            matches!(offset_store_error, ConsumerError::OffsetStore { source: _ }),
+            "expected offset_store_error to match OffsetStore variant"
+        );
+
+        assert!(
+            matches!(
+                invalid_group_name_source,
+                ConsumerGroupNameError::InvalidCharacter { character: '/' }
+            ),
+            "expected invalid_group_name_source to match InvalidCharacter variant"
+        );
+        assert!(
+            matches!(topic_error_source, TopicError::AlreadyExists { name } if name == "orders"),
+            "expected topic_error_source to match AlreadyExists variant"
+        );
+        assert!(
+            matches!(offset_store_error_source, OffsetStoreError::MalformedOffset { path } if path == "groups/orders/0.offset"),
+            "expected offset_store_error_source to match MalformedOffset variant"
+        );
+
+        assert!(
+            invalid_group_name_message.contains("invalid consumer group name"),
+            "expected invalid_group_name_message to contain 'invalid consumer group name'"
+        );
+        assert!(
+            invalid_group_name_message.contains("/"),
+            "expected invalid_group_name_message to contain '/'"
+        );
+        assert!(
+            topic_error_message.contains("already exists"),
+            "expected topic_error_message to contain 'already exists'"
+        );
+        assert!(
+            topic_error_message.contains("orders"),
+            "expected topic_error_message to contain 'orders'"
+        );
+        assert!(
+            topic_error_message.contains("topic error"),
+            "expected topic_error_message to contain 'topic error'"
+        );
+        assert!(
+            offset_store_error_message.contains("offset store error: malformed consumer offset at"),
+            "expected offset_store_error_message to contain 'offset store error: malformed consumer offset at'"
+        );
+        assert!(
+            offset_store_error_message.contains("groups/orders/0.offset"),
+            "expected offset_store_error_message to contain 'groups/orders/0.offset'"
         );
     }
 
