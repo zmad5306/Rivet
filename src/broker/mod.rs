@@ -1818,4 +1818,65 @@ mod tests {
             "expected committed offset for analytics on payments partition 0 to be offset_4 after restart"
         );
     }
+
+    #[test]
+    fn broker_redelivers_a_record_after_restart_when_handling_was_not_committed() {
+        let key = vec![1, 2, 3];
+        let payload = vec![4, 5, 6];
+        let input = PublishInput::new(Some(key), payload);
+        let topic = "orders";
+        let group = "fraud-detector";
+        let root_dir = tempfile::tempdir().expect("failed to create temporary data root");
+        let mut broker = Broker::open(
+            root_dir.path().to_path_buf(),
+            SegmentConfig::default(),
+            RecordLimits::default(),
+        )
+        .expect("failed to open broker on temporary data root");
+
+        broker
+            .create_topic(topic.to_string(), 1)
+            .expect("failed to create topic orders");
+
+        let publish_result = broker
+            .publish(topic, input)
+            .expect("failed to publish record to topic orders");
+        let record = broker
+            .read(topic, publish_result.partition(), publish_result.offset())
+            .expect("failed to read record from orders partition 0")
+            .expect("expected record to exist in orders partition 0");
+        let offset = broker
+            .get_committed_offset(group, topic, publish_result.partition())
+            .expect("failed to get committed offset for fraud-detector on orders partition 0");
+
+        assert!(
+            offset.is_none(),
+            "expected committed offset for fraud-detector on orders partition 0 to be None before any commit"
+        );
+
+        drop(broker);
+
+        let broker = Broker::open(
+            root_dir.path().to_path_buf(),
+            SegmentConfig::default(),
+            RecordLimits::default(),
+        )
+        .expect("failed to reopen broker on temporary data root");
+        let offset = broker.get_committed_offset(group, topic, publish_result.partition()).expect("failed to get committed offset for fraud-detector on orders partition 0 after restart");
+
+        assert!(
+            offset.is_none(),
+            "expected committed offset for fraud-detector on orders partition 0 to be None after restart"
+        );
+
+        let reread_record = broker
+            .read(topic, publish_result.partition(), publish_result.offset())
+            .expect("failed to reread record from orders partition 0 after restart")
+            .expect("expected record to exist in orders partition 0 after restart");
+
+        assert_eq!(
+            reread_record, record,
+            "expected reread record to match the originally read record"
+        );
+    }
 }
