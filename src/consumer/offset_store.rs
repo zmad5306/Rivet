@@ -920,17 +920,65 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn commit_offset_rejects_junction_at_group_directory_path_without_following_it() {
-        // TODO: Create a temporary broker data root and a separate empty target directory, then
-        // construct valid `fraud-detector` and `orders` identities and an OffsetStore.
-        // TODO: Create the reserved offset-store root as a real directory, then use
-        // `std::process::Command` to run `cmd.exe /C mklink /J <group-path> <target-path>` so the
-        // `fraud-detector` group component is a Windows directory junction; require a successful
-        // command status before exercising the store.
-        // TODO: Attempt to commit partition 0 next offset 32 and verify the typed result is
-        // `OffsetStoreError::UnsafePath` retaining the junction's group path.
-        // TODO: Verify the junction and its target still exist, the target directory remains
-        // empty, and no `orders/0.offset` path was created through the junction.
-        todo!()
+        use std::process::Command;
+
+        let consumer_group = "fraud-detector";
+        let topic = "orders";
+        let data_root = tempfile::tempdir().expect("failed to create data root");
+        let junction_target = tempfile::tempdir().expect("failed to create data root");
+        let consumer_group_name = ConsumerGroupName::new(consumer_group.to_string())
+            .expect("should accept valid fraud-detector consumer group name");
+        let topic_name =
+            TopicName::new(topic.to_string()).expect("should accept valid orders topic name");
+        let offset_store = OffsetStore::new(data_root.path());
+        let offset_store_dir = data_root.path().join(OFFSET_STORE_DIR);
+        let group_dir = offset_store_dir.join(consumer_group);
+        let orders_path = junction_target.path().join(topic);
+        let final_offset_path = orders_path.join("0.offset");
+
+        std::fs::create_dir_all(&offset_store_dir).expect("failed to create orders path");
+
+        let output = Command::new("cmd.exe")
+            .args(["/C", "mklink", "/J"])
+            .arg(&group_dir)
+            .arg(junction_target.path())
+            .output()
+            .expect("failed to create junction");
+
+        assert!(
+            output.status.success(),
+            "failed to create junction:\n\n{}\n\n{}",
+            String::from_utf8_lossy(&output.stderr),
+            String::from_utf8_lossy(&output.stdout)
+        );
+
+        let error = offset_store
+            .commit_offset(&consumer_group_name, &topic_name, 0, 32)
+            .expect_err("should reject committing offset through a junction");
+
+        assert!(
+            matches!(error, OffsetStoreError::UnsafePath { path } if path == group_dir),
+            "expected UnsafePath error"
+        );
+        assert!(
+            group_dir.exists(),
+            "expected junction group directory to still exist"
+        );
+        assert!(
+            junction_target.path().exists(),
+            "expected junction target directory to still exist"
+        );
+        assert!(
+            !final_offset_path.exists(),
+            "expected final offset path to not exist through the junction"
+        );
+        assert!(
+            std::fs::read_dir(junction_target.path())
+                .expect("failed to read junction target directory")
+                .next()
+                .is_none(),
+            "expected junction target directory to be empty"
+        );
     }
 
     #[test]
