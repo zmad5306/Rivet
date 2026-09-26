@@ -277,6 +277,109 @@ impl std::error::Error for TopicNameError {
 }
 
 #[derive(Debug, PartialEq, Eq)]
+pub enum ConsumerGroupNameError {
+    InvalidLength { actual: usize },
+    InvalidCharacter { character: char },
+}
+
+impl std::fmt::Display for ConsumerGroupNameError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ConsumerGroupNameError::InvalidLength { actual } => write!(
+                f,
+                "invalid consumer group name length: {}, 1 to 128 bytes allowed",
+                actual
+            ),
+            ConsumerGroupNameError::InvalidCharacter { character } => write!(
+                f,
+                "invalid character '{}' in consumer group name, only ASCII letters, digits, - and _ allowed.",
+                character
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ConsumerGroupNameError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            ConsumerGroupNameError::InvalidLength { .. } => None,
+            ConsumerGroupNameError::InvalidCharacter { .. } => None,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum OffsetStoreError {
+    Rewind {
+        current: u64,
+        requested: u64,
+    },
+    Io {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+    MalformedOffset {
+        path: PathBuf,
+    },
+    UnsafePath {
+        path: PathBuf,
+    },
+    UnsupportedPartitionId {
+        requested: u32,
+    },
+}
+
+impl std::fmt::Display for OffsetStoreError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            OffsetStoreError::Rewind { current, requested } => write!(
+                f,
+                "cannot rewind consumer offset: current {}, requested {}",
+                current, requested
+            ),
+            OffsetStoreError::Io { path, source } => write!(
+                f,
+                "offset-store I/O error at {}: {}",
+                path.display(),
+                source
+            ),
+            OffsetStoreError::MalformedOffset { path } => {
+                write!(f, "malformed consumer offset at {}", path.display())
+            }
+            OffsetStoreError::UnsafePath { path } => {
+                write!(f, "unsafe consumer offset path at {}", path.display())
+            }
+            OffsetStoreError::UnsupportedPartitionId { requested } => write!(
+                f,
+                "unsupported partition id: {}, only partition id 0 is supported",
+                requested
+            ),
+        }
+    }
+}
+
+impl std::error::Error for OffsetStoreError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            OffsetStoreError::Rewind { .. } => None,
+            OffsetStoreError::Io { source, .. } => Some(source),
+            OffsetStoreError::MalformedOffset { .. } => None,
+            OffsetStoreError::UnsafePath { .. } => None,
+            OffsetStoreError::UnsupportedPartitionId { .. } => None,
+        }
+    }
+}
+
+impl From<std::io::Error> for OffsetStoreError {
+    fn from(source: std::io::Error) -> Self {
+        OffsetStoreError::Io {
+            path: PathBuf::new(),
+            source,
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
 pub enum CatalogEntryErrorReason {
     InvalidTopicName,
     NotDirectory,
@@ -418,10 +521,74 @@ impl From<TopicNameError> for TopicError {
     }
 }
 
+#[derive(Debug)]
+pub enum ConsumerError {
+    InvalidGroupName { source: ConsumerGroupNameError },
+    Topic { source: TopicError },
+    OffsetStore { source: OffsetStoreError },
+}
+
+impl std::fmt::Display for ConsumerError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ConsumerError::InvalidGroupName { source } => {
+                write!(f, "invalid consumer group name: {}", source)
+            }
+            ConsumerError::Topic { source } => {
+                write!(f, "topic error: {}", source)
+            }
+            ConsumerError::OffsetStore { source } => {
+                write!(f, "offset store error: {}", source)
+            }
+        }
+    }
+}
+
+impl std::error::Error for ConsumerError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            ConsumerError::InvalidGroupName { source } => Some(source),
+            ConsumerError::Topic { source } => Some(source),
+            ConsumerError::OffsetStore { source } => Some(source),
+        }
+    }
+}
+
+impl From<ConsumerGroupNameError> for ConsumerError {
+    fn from(source: ConsumerGroupNameError) -> Self {
+        ConsumerError::InvalidGroupName { source }
+    }
+}
+
+impl From<TopicError> for ConsumerError {
+    fn from(source: TopicError) -> Self {
+        ConsumerError::Topic { source }
+    }
+}
+
+impl From<OffsetStoreError> for ConsumerError {
+    fn from(source: OffsetStoreError) -> Self {
+        ConsumerError::OffsetStore { source }
+    }
+}
+
+impl From<TopicNameError> for ConsumerError {
+    fn from(source: TopicNameError) -> Self {
+        let topic_error = TopicError::from(source);
+        ConsumerError::Topic {
+            source: topic_error,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::error::{
-        CatalogEntryErrorReason, CodecError, PartitionError, StorageError, TopicError,
+    use crate::{
+        consumer::OFFSET_STORE_DIR,
+        error::{
+            CatalogEntryErrorReason, CodecError, ConsumerError, ConsumerGroupNameError,
+            OffsetStoreError, PartitionError, StorageError, TopicError,
+        },
     };
     use std::{error::Error, path::PathBuf};
 
@@ -434,7 +601,8 @@ mod tests {
 
         assert!(
             matches!(&error, TopicError::UnsupportedPartitionId { requested: actual } if actual == &partition_id),
-            ""
+            "expected unsupported partition id error with requested {}",
+            partition_id
         );
         assert_eq!(
             &error.to_string(),
@@ -453,12 +621,14 @@ mod tests {
 
         assert!(
             matches!(&error, TopicError::UnsupportedPartitionCount { requested: actual } if actual == &partition_count),
-            ""
+            "expected unsupported partition count error with requested {}",
+            partition_count
         );
         assert_eq!(
             &error.to_string(),
             "unsupported partition count: 2, only a count of 1 is supported",
-            ""
+            "expected unsupported partition count error with requested {}",
+            partition_count
         );
         assert!(error.source().is_none(), "");
     }
@@ -470,13 +640,17 @@ mod tests {
             path: path.clone(),
             reason: CatalogEntryErrorReason::InvalidTopicName,
         };
-        assert!(matches!(
-            &topic_error,
-            TopicError::UnexpectedCatalogEntry {
-                path: actual,
-                reason: CatalogEntryErrorReason::InvalidTopicName,
-            } if actual == &path
-        ));
+        assert!(
+            matches!(
+                &topic_error,
+                TopicError::UnexpectedCatalogEntry {
+                    path: actual,
+                    reason: CatalogEntryErrorReason::InvalidTopicName,
+                } if actual == &path
+            ),
+            "expected unexpected catalog entry error with path {}",
+            path.display()
+        );
 
         let diagnostic = topic_error.to_string();
         assert!(diagnostic.contains("invalid topic name"));
@@ -492,13 +666,17 @@ mod tests {
             path: path.clone(),
             reason: CatalogEntryErrorReason::NotDirectory,
         };
-        assert!(matches!(
-            &topic_error,
-            TopicError::UnexpectedCatalogEntry {
-                path: actual,
-                reason: CatalogEntryErrorReason::NotDirectory,
-            } if actual == &path
-        ));
+        assert!(
+            matches!(
+                &topic_error,
+                TopicError::UnexpectedCatalogEntry {
+                    path: actual,
+                    reason: CatalogEntryErrorReason::NotDirectory,
+                } if actual == &path
+            ),
+            "expected unexpected catalog entry error with path {}",
+            path.display()
+        );
 
         let diagnostic = topic_error.to_string();
         assert!(diagnostic.contains("expected a directory"));
@@ -514,13 +692,17 @@ mod tests {
             path: path.clone(),
             reason: CatalogEntryErrorReason::SymbolicLink,
         };
-        assert!(matches!(
-            &topic_error,
-            TopicError::UnexpectedCatalogEntry {
-                path: actual,
-                reason: CatalogEntryErrorReason::SymbolicLink,
-            } if actual == &path
-        ));
+        assert!(
+            matches!(
+                &topic_error,
+                TopicError::UnexpectedCatalogEntry {
+                    path: actual,
+                    reason: CatalogEntryErrorReason::SymbolicLink,
+                } if actual == &path
+            ),
+            "expected unexpected catalog entry error with path {}",
+            path.display()
+        );
 
         let diagnostic = topic_error.to_string();
         assert!(diagnostic.contains("symbolic links are not supported"));
@@ -560,7 +742,7 @@ mod tests {
         assert!(
             matches!(&error, TopicError::AlreadyExists { name: actual } if actual == name),
             "Expected AlreadyExists error with name {}",
-            name
+            name,
         );
         assert!(
             error.source().is_none(),
@@ -590,7 +772,8 @@ mod tests {
         let io_error = std::io::Error::other("oh no!");
         let error = TopicError::from(io_error);
         assert!(
-            matches!(error, TopicError::Io { source } if source.kind() == std::io::ErrorKind::Other && source.to_string() == "oh no!")
+            matches!(error, TopicError::Io { source } if source.kind() == std::io::ErrorKind::Other && source.to_string() == "oh no!", ),
+            "expected I/O error with kind Other and message 'oh no!'"
         );
     }
 
@@ -602,7 +785,8 @@ mod tests {
         };
         let error = TopicError::from(storage_error);
         assert!(
-            matches!(error, TopicError::Storage { source } if matches!(source, StorageError::UnexpectedOffset { expected: 1, actual: 2 }))
+            matches!(error, TopicError::Storage { source } if matches!(source, StorageError::UnexpectedOffset { expected: 1, actual: 2 })),
+            "expected storage error with unexpected offset of expected 1 and actual 2"
         );
     }
 
@@ -628,15 +812,19 @@ mod tests {
             .expect("Expected nested source to be StorageError");
 
         assert!(
-            matches!(partition_source, PartitionError::Storage { source } if matches!(source, StorageError::UnexpectedOffset { expected: 1, actual: 2 }))
+            matches!(partition_source, PartitionError::Storage { source } if matches!(source, StorageError::UnexpectedOffset { expected: 1, actual: 2 })),
+            "expected partition error with storage source having unexpected offset of expected 1 and actual 2"
         );
-        assert!(matches!(
-            storage_source,
-            StorageError::UnexpectedOffset {
-                expected: 1,
-                actual: 2
-            }
-        ));
+        assert!(
+            matches!(
+                storage_source,
+                StorageError::UnexpectedOffset {
+                    expected: 1,
+                    actual: 2
+                },
+            ),
+            "expected storage error with unexpected offset of expected 1 and actual 2"
+        );
     }
 
     #[test]
@@ -647,8 +835,16 @@ mod tests {
         let io_source = source
             .downcast_ref::<std::io::Error>()
             .expect("Expected source to be std::io::Error");
-        assert_eq!(io_source.kind(), std::io::ErrorKind::Other);
-        assert_eq!(io_source.to_string(), "oh no!");
+        assert_eq!(
+            io_source.kind(),
+            std::io::ErrorKind::Other,
+            "expected I/O error kind to be Other"
+        );
+        assert_eq!(
+            io_source.to_string(),
+            "oh no!",
+            "expected I/O error message to be 'oh no!'"
+        );
     }
 
     #[test]
@@ -675,25 +871,38 @@ mod tests {
             .downcast_ref::<CodecError>()
             .expect("Expected nested source to be CodecError");
         assert!(
-            matches!(storage_source, StorageError::CorruptRecord { path: path_buf, byte_position: byte_pos, source: _ } if path_buf == &path && *byte_pos == byte_position)
+            matches!(storage_source, StorageError::CorruptRecord { path: path_buf, byte_position: byte_pos, source: _ } if path_buf == &path && *byte_pos == byte_position),
+            "expected storage error with corrupt record at path {} and byte position {}",
+            path.display(),
+            byte_position
         );
-        assert!(matches!(codec_source, CodecError::IncompleteBody));
+        assert!(
+            matches!(codec_source, CodecError::IncompleteBody),
+            "expected codec error to be IncompleteBody"
+        );
     }
 
     #[test]
     fn storage_codec_conversion_preserves_typed_source() {
         let error = StorageError::from(CodecError::InvalidChecksum);
-        assert!(matches!(
-            &error,
-            StorageError::Codec(CodecError::InvalidChecksum)
-        ));
+        assert!(
+            matches!(&error, StorageError::Codec(CodecError::InvalidChecksum)),
+            "expected storage error with codec source being InvalidChecksum"
+        );
         let source = error.source().expect("codec cause should be retained");
         assert_eq!(
             source.downcast_ref::<CodecError>(),
-            Some(&CodecError::InvalidChecksum)
+            Some(&CodecError::InvalidChecksum),
+            "expected codec source to be InvalidChecksum"
         );
-        assert!(source.source().is_none());
-        assert!(error.to_string().contains(&source.to_string()));
+        assert!(
+            source.source().is_none(),
+            "expected codec source to have no further source"
+        );
+        assert!(
+            error.to_string().contains(&source.to_string()),
+            "expected error message to contain codec source message"
+        );
     }
 
     #[test]
@@ -702,16 +911,30 @@ mod tests {
             std::io::ErrorKind::PermissionDenied,
             "cannot open segment",
         ));
-        assert!(matches!(&error, StorageError::Io(inner)
-            if inner.kind() == std::io::ErrorKind::PermissionDenied));
+        assert!(
+            matches!(&error, StorageError::Io(inner)
+            if inner.kind() == std::io::ErrorKind::PermissionDenied),
+            "expected storage error with I/O source having PermissionDenied kind"
+        );
         let source = error
             .source()
             .unwrap()
             .downcast_ref::<std::io::Error>()
             .unwrap();
-        assert_eq!(source.kind(), std::io::ErrorKind::PermissionDenied);
-        assert_eq!(source.to_string(), "cannot open segment");
-        assert!(error.to_string().contains("cannot open segment"));
+        assert_eq!(
+            source.kind(),
+            std::io::ErrorKind::PermissionDenied,
+            "expected I/O error kind to be PermissionDenied"
+        );
+        assert_eq!(
+            source.to_string(),
+            "cannot open segment",
+            "expected I/O error message to be 'cannot open segment'"
+        );
+        assert!(
+            error.to_string().contains("cannot open segment"),
+            "expected storage error message to contain I/O error message"
+        );
     }
 
     #[test]
@@ -726,12 +949,22 @@ mod tests {
             source: CodecError::InvalidChecksum,
         };
         let message = error.to_string();
-        assert!(message.contains(path.to_str().unwrap()));
-        assert!(message.contains("byte 137"));
-        assert!(message.contains("invalid checksum"));
+        assert!(
+            message.contains(path.to_str().unwrap()),
+            "expected error message to contain the path"
+        );
+        assert!(
+            message.contains("byte 137"),
+            "expected error message to contain the byte position"
+        );
+        assert!(
+            message.contains("invalid checksum"),
+            "expected error message to contain the codec error message"
+        );
         assert_eq!(
             error.source().unwrap().downcast_ref::<CodecError>(),
-            Some(&CodecError::InvalidChecksum)
+            Some(&CodecError::InvalidChecksum),
+            "expected storage error to have codec source being InvalidChecksum"
         );
     }
 
@@ -745,21 +978,41 @@ mod tests {
                 "rotation destination exists",
             ))),
         };
-        assert!(matches!(&error, StorageError::RotationAfterCommit {
+        assert!(
+            matches!(&error, StorageError::RotationAfterCommit {
             committed_offset: 41, next_offset: 42, source,
-        } if matches!(source.as_ref(), StorageError::Io(_))));
+        } if matches!(source.as_ref(), StorageError::Io(_))),
+            "expected rotation after commit error to have nested I/O cause"
+        );
         let message = error.to_string();
-        assert!(message.contains("committed offset 41"));
-        assert!(message.contains("next offset 42"));
-        assert!(message.contains("rotation destination exists"));
+        assert!(
+            message.contains("committed offset 41"),
+            "expected error message to contain the committed offset"
+        );
+        assert!(
+            message.contains("next offset 42"),
+            "expected error message to contain the next offset"
+        );
+        assert!(
+            message.contains("rotation destination exists"),
+            "expected error message to contain the I/O error message"
+        );
         let storage_source = error.source().expect("rotation cause should be retained");
         let io_source = storage_source
             .source()
             .unwrap()
             .downcast_ref::<std::io::Error>()
             .unwrap();
-        assert_eq!(io_source.kind(), std::io::ErrorKind::AlreadyExists);
-        assert_eq!(io_source.to_string(), "rotation destination exists");
+        assert_eq!(
+            io_source.kind(),
+            std::io::ErrorKind::AlreadyExists,
+            "expected I/O error kind to be AlreadyExists"
+        );
+        assert_eq!(
+            io_source.to_string(),
+            "rotation destination exists",
+            "expected I/O error message to be 'rotation destination exists'"
+        );
     }
 
     #[test]
@@ -826,14 +1079,255 @@ mod tests {
     #[test]
     fn validation_diagnostics_retain_rejected_values_without_sources() {
         let config = super::ConfigurationError::InvalidSegmentBytes { value: 0 };
-        assert!(config.to_string().contains('0'));
-        assert!(config.source().is_none());
+        assert!(
+            config.to_string().contains('0'),
+            "expected error message to contain the rejected value 0"
+        );
+        assert!(
+            config.source().is_none(),
+            "expected error to have no source"
+        );
+
         let length = super::TopicNameError::InvalidLength { actual: 129 };
-        assert!(length.to_string().contains("129"));
-        assert!(length.source().is_none());
+        assert!(
+            length.to_string().contains("129"),
+            "expected error message to contain the rejected value 129"
+        );
+        assert!(
+            length.source().is_none(),
+            "expected error to have no source"
+        );
+
         let character = super::TopicNameError::InvalidCharacter { character: '/' };
-        assert!(character.to_string().contains('/'));
-        assert!(character.source().is_none());
+        assert!(
+            character.to_string().contains('/'),
+            "expected error message to contain the rejected character '/'"
+        );
+        assert!(
+            character.source().is_none(),
+            "expected error to have no source"
+        );
+    }
+
+    #[test]
+    fn consumer_group_name_diagnostics_retain_rejected_values_without_sources() {
+        let length_error = super::ConsumerGroupNameError::InvalidLength { actual: 129 };
+        assert!(
+            length_error.to_string().contains("129"),
+            "expected error message to contain the rejected value 129"
+        );
+        assert!(
+            length_error.source().is_none(),
+            "expected error to have no source"
+        );
+
+        let character_error = super::ConsumerGroupNameError::InvalidCharacter { character: '/' };
+        assert!(
+            character_error.to_string().contains("/"),
+            "expected error message to contain the rejected character '/'"
+        );
+        assert!(
+            character_error.source().is_none(),
+            "expected error to have no source"
+        );
+    }
+
+    #[test]
+    fn offset_store_rewind_error_retains_offsets_and_has_no_source() {
+        let error = super::OffsetStoreError::Rewind {
+            current: 43,
+            requested: 42,
+        };
+        assert!(
+            matches!(
+                error,
+                super::OffsetStoreError::Rewind {
+                    current: 43,
+                    requested: 42
+                }
+            ),
+            "missing rewind error with current 43 and requested 42 in {error}"
+        );
+        assert!(error.source().is_none(), "expected error to have no source");
+        assert_eq!(
+            error.to_string(),
+            "cannot rewind consumer offset: current 43, requested 42",
+            "unexpected error message"
+        );
+    }
+
+    #[test]
+    fn offset_store_io_error_retains_path_and_typed_source() {
+        let path: PathBuf = "groups/orders/0.offset".into();
+        let error = super::OffsetStoreError::Io {
+            path: path.clone(),
+            source: std::io::Error::new(std::io::ErrorKind::PermissionDenied, "offset denied"),
+        };
+        let source = error.source().expect("expected an I/O source");
+        let io_source = source
+            .downcast_ref::<std::io::Error>()
+            .expect("source should be std::io::Error");
+
+        assert_eq!(
+            io_source.kind(),
+            std::io::ErrorKind::PermissionDenied,
+            "expected I/O error kind to be PermissionDenied"
+        );
+        assert_eq!(
+            io_source.to_string(),
+            "offset denied",
+            "expected I/O error message to be 'offset denied'"
+        );
+        assert!(
+            matches!(
+                &error,
+                super::OffsetStoreError::Io {
+                    path: actual_path,
+                    source
+                } if actual_path == &path
+                    && source.kind() == std::io::ErrorKind::PermissionDenied
+            ),
+            "I/O variant did not retain its path and source kind"
+        );
+
+        assert_eq!(
+            error.to_string(),
+            "offset-store I/O error at groups/orders/0.offset: offset denied",
+            "unexpected offset-store I/O diagnostic"
+        );
+    }
+
+    #[test]
+    fn malformed_offset_error_retains_path_and_has_no_source() {
+        let path: PathBuf = "groups/orders/0.offset".into();
+        let error = super::OffsetStoreError::MalformedOffset { path: path.clone() };
+
+        assert!(matches!(
+            &error,
+            super::OffsetStoreError::MalformedOffset { path: actual_path } if actual_path == &path
+        ));
+        assert_eq!(
+            error.to_string(),
+            "malformed consumer offset at groups/orders/0.offset",
+            "unexpected malformed offset diagnostic"
+        );
+        assert!(
+            error.source().is_none(),
+            "expected no source for malformed offset"
+        );
+    }
+
+    #[test]
+    fn unsafe_offset_path_error_retains_path_and_has_no_source() {
+        let path: PathBuf = format!("{}/fraud-detector", OFFSET_STORE_DIR).into();
+        let error = super::OffsetStoreError::UnsafePath { path: path.clone() };
+
+        assert!(matches!(
+            &error,
+            super::OffsetStoreError::UnsafePath { path: actual_path } if actual_path == &path
+        ));
+        assert_eq!(
+            error.to_string(),
+            "unsafe consumer offset path at __consumer_offsets/fraud-detector",
+            "unexpected unsafe path diagnostic"
+        );
+        assert!(
+            error.source().is_none(),
+            "expected no source for unsafe path"
+        );
+    }
+
+    #[test]
+    fn consumer_error_wraps_each_boundary_error_without_erasing_its_source() {
+        let invalid_group_name =
+            ConsumerError::from(ConsumerGroupNameError::InvalidCharacter { character: '/' });
+        let topic_error = ConsumerError::from(TopicError::AlreadyExists {
+            name: "orders".to_string(),
+        });
+        let offset_store_error = ConsumerError::from(OffsetStoreError::MalformedOffset {
+            path: "groups/orders/0.offset".into(),
+        });
+
+        let invalid_group_name_source = invalid_group_name
+            .source()
+            .expect("expected source for invalid_group_name")
+            .downcast_ref::<ConsumerGroupNameError>()
+            .expect("expected ConsumerGroupNameError as source for invalid_group_name");
+        let topic_error_source = topic_error
+            .source()
+            .expect("expected source for topic_error")
+            .downcast_ref::<TopicError>()
+            .expect("expected TopicError as source for topic_error");
+        let offset_store_error_source = offset_store_error
+            .source()
+            .expect("expected source for offset_store_error")
+            .downcast_ref::<OffsetStoreError>()
+            .expect("expected OffsetStoreError as source for offset_store_error");
+
+        let invalid_group_name_message = invalid_group_name.to_string();
+        let topic_error_message = topic_error.to_string();
+        let offset_store_error_message = offset_store_error.to_string();
+
+        assert!(
+            matches!(
+                invalid_group_name,
+                ConsumerError::InvalidGroupName { source: _ }
+            ),
+            "expected invalid_group_name to match InvalidGroupName variant"
+        );
+        assert!(
+            matches!(topic_error, ConsumerError::Topic { source: _ }),
+            "expected topic_error to match Topic variant"
+        );
+        assert!(
+            matches!(offset_store_error, ConsumerError::OffsetStore { source: _ }),
+            "expected offset_store_error to match OffsetStore variant"
+        );
+
+        assert!(
+            matches!(
+                invalid_group_name_source,
+                ConsumerGroupNameError::InvalidCharacter { character: '/' }
+            ),
+            "expected invalid_group_name_source to match InvalidCharacter variant"
+        );
+        assert!(
+            matches!(topic_error_source, TopicError::AlreadyExists { name } if name == "orders"),
+            "expected topic_error_source to match AlreadyExists variant"
+        );
+        assert!(
+            matches!(offset_store_error_source, OffsetStoreError::MalformedOffset { path } if path == "groups/orders/0.offset"),
+            "expected offset_store_error_source to match MalformedOffset variant"
+        );
+
+        assert!(
+            invalid_group_name_message.contains("invalid consumer group name"),
+            "expected invalid_group_name_message to contain 'invalid consumer group name'"
+        );
+        assert!(
+            invalid_group_name_message.contains("/"),
+            "expected invalid_group_name_message to contain '/'"
+        );
+        assert!(
+            topic_error_message.contains("already exists"),
+            "expected topic_error_message to contain 'already exists'"
+        );
+        assert!(
+            topic_error_message.contains("orders"),
+            "expected topic_error_message to contain 'orders'"
+        );
+        assert!(
+            topic_error_message.contains("topic error"),
+            "expected topic_error_message to contain 'topic error'"
+        );
+        assert!(
+            offset_store_error_message.contains("offset store error: malformed consumer offset at"),
+            "expected offset_store_error_message to contain 'offset store error: malformed consumer offset at'"
+        );
+        assert!(
+            offset_store_error_message.contains("groups/orders/0.offset"),
+            "expected offset_store_error_message to contain 'groups/orders/0.offset'"
+        );
     }
 
     #[test]
