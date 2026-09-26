@@ -917,6 +917,22 @@ mod tests {
         );
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn commit_offset_rejects_junction_at_group_directory_path_without_following_it() {
+        // TODO: Create a temporary broker data root and a separate empty target directory, then
+        // construct valid `fraud-detector` and `orders` identities and an OffsetStore.
+        // TODO: Create the reserved offset-store root as a real directory, then use
+        // `std::process::Command` to run `cmd.exe /C mklink /J <group-path> <target-path>` so the
+        // `fraud-detector` group component is a Windows directory junction; require a successful
+        // command status before exercising the store.
+        // TODO: Attempt to commit partition 0 next offset 32 and verify the typed result is
+        // `OffsetStoreError::UnsafePath` retaining the junction's group path.
+        // TODO: Verify the junction and its target still exist, the target directory remains
+        // empty, and no `orders/0.offset` path was created through the junction.
+        todo!()
+    }
+
     #[test]
     fn commit_offset_prepublication_failure_preserves_prior_value() {
         let data_root = tempfile::tempdir().expect("failed to create temporary data root");
