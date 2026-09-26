@@ -214,8 +214,8 @@ mod tests {
 
     use crate::broker::Broker;
     use crate::error::{
-        CatalogEntryErrorReason, CodecError, PartitionError, StorageError, TopicError,
-        TopicNameError,
+        CatalogEntryErrorReason, CodecError, ConsumerError, PartitionError, StorageError,
+        TopicError, TopicNameError,
     };
     use crate::storage::record::{PublishInput, RecordLimits};
     use crate::storage::segment::SegmentConfig;
@@ -1590,36 +1590,232 @@ mod tests {
 
     #[test]
     fn broker_commit_lookup_and_restart_delegate_for_a_known_topic() {
-        // TODO: Open a Broker on a temporary data root and create the `orders` topic.
-        // TODO: Observe through `get_committed_offset` that group `fraud-detector`, topic
-        // `orders`, partition 0 initially has no committed offset.
-        // TODO: Commit next offset 43 through the Broker API and verify lookup returns 43.
-        // TODO: Drop and reopen the Broker on the same data root, then verify the same public
-        // lookup still returns 43 and `list_topics` contains only `orders`.
-        todo!()
+        let group = "fraud-detector".to_string();
+        let topic = "orders".to_string();
+        let partition_id = 0;
+        let next_offset = 43;
+        let data_root = tempfile::tempdir().expect("failed to create temporary data root");
+        let mut broker = Broker::open(
+            data_root.path().to_path_buf(),
+            SegmentConfig::default(),
+            RecordLimits::default(),
+        )
+        .expect("failed to open broker");
+
+        broker
+            .create_topic(topic.clone(), 1)
+            .expect("failed to create topic 'orders'");
+
+        let fraud_offset_opt = broker
+            .get_committed_offset(&"fraud-detector".to_string(), &"orders".to_string(), 0)
+            .expect("failed to get committed offset for fraud-detector on orders partition 0");
+
+        assert!(
+            fraud_offset_opt.is_none(),
+            "expected no committed offset for fraud-detector on orders partition 0"
+        );
+
+        broker
+            .commit_offset(&group, &topic, partition_id, next_offset)
+            .expect("failed to commit offset for fraud-detector on orders partition 0");
+
+        let fraud_offset = broker
+            .get_committed_offset(&group, &topic, partition_id)
+            .expect("failed to get committed offset for fraud-detector on orders partition 0")
+            .expect("expected a committed offset for fraud-detector on orders partition 0");
+
+        assert_eq!(fraud_offset, next_offset);
+
+        drop(broker);
+
+        let broker = Broker::open(
+            data_root.path().to_path_buf(),
+            SegmentConfig::default(),
+            RecordLimits::default(),
+        )
+        .expect("failed to reopen broker");
+        let fraud_offset_after_restart = broker.get_committed_offset(&group, &topic, partition_id).expect("failed to get committed offset for fraud-detector on orders partition 0 after restart").expect("expected a committed offset for fraud-detector on orders partition 0 after restart");
+
+        assert_eq!(fraud_offset_after_restart, next_offset);
+        assert!(
+            broker.list_topics().contains(&topic.as_str()),
+            "expected 'orders' to be listed among topics"
+        );
     }
 
     #[test]
     fn broker_rejects_missing_topic_and_unsupported_partition_before_offset_mutation() {
-        // TODO: Open a Broker, then attempt a partition-0 commit for valid group
-        // `fraud-detector` and missing topic `orders`; verify the nested typed error is
-        // `ConsumerError::Topic` containing `TopicError::NotFound` for `orders`.
-        // TODO: Create `orders`, verify its partition-0 committed offset is still None, then
-        // attempt a commit to unsupported partition 1 and verify the nested topic error retains
-        // requested partition 1.
-        // TODO: Verify partition 0 remains None after the rejected partition-1 commit, proving
-        // both Broker-owned rejection paths occurred before offset mutation.
-        todo!()
+        let group = "fraud-detector".to_string();
+        let topic = "orders".to_string();
+        let partition_id = 0;
+        let next_offset = 43;
+        let data_root = tempfile::tempdir().expect("failed to create temporary data root");
+        let mut broker = Broker::open(
+            data_root.path().to_path_buf(),
+            SegmentConfig::default(),
+            RecordLimits::default(),
+        )
+        .expect("failed to open broker");
+
+        let error = broker
+            .commit_offset(&group, &topic, 0, next_offset)
+            .expect_err("expected an error when committing offset for missing topic");
+
+        assert!(matches!(
+            error,
+            ConsumerError::Topic {
+                source: TopicError::NotFound { ref name }
+            } if name == &topic
+        ));
+
+        broker
+            .create_topic(topic.clone(), 1)
+            .expect("failed to create topic 'orders'");
+
+        let offset_opt = broker
+            .get_committed_offset(&group, &topic, partition_id)
+            .expect("failed to get committed offset for fraud-detector on orders partition 0");
+
+        assert!(
+            offset_opt.is_none(),
+            "expected committed offset for fraud-detector on orders partition 0 to be None after topic creation"
+        );
+
+        let error = broker
+            .commit_offset(&group, &topic, 1, next_offset)
+            .expect_err("expected an error when committing offset for unsupported partition 1");
+
+        assert!(matches!(
+            error,
+            ConsumerError::Topic {
+                source: TopicError::UnsupportedPartitionId { requested: 1 }
+            }
+        ));
+
+        let offset_opt = broker
+            .get_committed_offset(&group, &topic, partition_id)
+            .expect("failed to get committed offset for fraud-detector on orders partition 0");
+
+        assert!(
+            offset_opt.is_none(),
+            "expected committed offset for fraud-detector on orders partition 0 to remain None after rejected partition-1 commit"
+        );
     }
 
     #[test]
     fn broker_preserves_group_and_topic_offset_isolation_across_restart() {
-        // TODO: Open a Broker and create topics `orders` and `payments`.
-        // TODO: Through Broker APIs, commit distinct next offsets for both `fraud-detector` and
-        // `analytics` on each topic's partition 0; use four distinct values so swapped group or
-        // topic arguments are observable.
-        // TODO: Verify all four lookups return their matching values, drop and reopen the Broker,
-        // and verify the same four public lookups still return the matching values.
-        todo!()
+        let group = "fraud-detector".to_string();
+        let analytics_group = "analytics".to_string();
+        let orders_topic = "orders".to_string();
+        let payments_topic = "payments".to_string();
+        let partition_id = 0;
+        let offset_1 = 4;
+        let offset_2 = 7;
+        let offset_3 = 11;
+        let offset_4 = 13;
+        let data_root = tempfile::tempdir().expect("failed to create temporary data root");
+        let mut broker = Broker::open(
+            data_root.path().to_path_buf(),
+            SegmentConfig::default(),
+            RecordLimits::default(),
+        )
+        .expect("failed to open broker");
+
+        broker
+            .create_topic(orders_topic.clone(), 1)
+            .expect("failed to create topic 'orders'");
+        broker
+            .create_topic(payments_topic.clone(), 1)
+            .expect("failed to create topic 'payments'");
+
+        broker
+            .commit_offset(&group, &orders_topic, partition_id, offset_1)
+            .expect("failed to commit offset for fraud-detector on orders partition 0");
+        broker
+            .commit_offset(&analytics_group, &orders_topic, partition_id, offset_2)
+            .expect("failed to commit offset for analytics on orders partition 0");
+        broker
+            .commit_offset(&group, &payments_topic, partition_id, offset_3)
+            .expect("failed to commit offset for fraud-detector on payments partition 0");
+        broker
+            .commit_offset(&analytics_group, &payments_topic, partition_id, offset_4)
+            .expect("failed to commit offset for analytics on payments partition 0");
+
+        let offset_opt = broker
+            .get_committed_offset(&group, &orders_topic, partition_id)
+            .expect("failed to get committed offset for fraud-detector on orders partition 0");
+        assert_eq!(
+            offset_opt,
+            Some(offset_1),
+            "expected committed offset for fraud-detector on orders partition 0 to be offset_1"
+        );
+
+        let offset_opt = broker
+            .get_committed_offset(&analytics_group, &orders_topic, partition_id)
+            .expect("failed to get committed offset for analytics on orders partition 0");
+        assert_eq!(
+            offset_opt,
+            Some(offset_2),
+            "expected committed offset for analytics on orders partition 0 to be offset_2"
+        );
+
+        let offset_opt = broker
+            .get_committed_offset(&group, &payments_topic, partition_id)
+            .expect("failed to get committed offset for fraud-detector on payments partition 0");
+        assert_eq!(
+            offset_opt,
+            Some(offset_3),
+            "expected committed offset for fraud-detector on payments partition 0 to be offset_3"
+        );
+
+        let offset_opt = broker
+            .get_committed_offset(&analytics_group, &payments_topic, partition_id)
+            .expect("failed to get committed offset for analytics on payments partition 0");
+        assert_eq!(
+            offset_opt,
+            Some(offset_4),
+            "expected committed offset for analytics on payments partition 0 to be offset_4"
+        );
+
+        drop(broker);
+
+        let broker = Broker::open(
+            data_root.path().to_path_buf(),
+            SegmentConfig::default(),
+            RecordLimits::default(),
+        )
+        .expect("failed to reopen broker");
+
+        let offset_opt = broker.get_committed_offset(&group, &orders_topic, partition_id).expect("failed to get committed offset for fraud-detector on orders partition 0 after restart");
+        assert_eq!(
+            offset_opt,
+            Some(offset_1),
+            "expected committed offset for fraud-detector on orders partition 0 to be offset_1 after restart"
+        );
+
+        let offset_opt = broker
+            .get_committed_offset(&analytics_group, &orders_topic, partition_id)
+            .expect(
+                "failed to get committed offset for analytics on orders partition 0 after restart",
+            );
+        assert_eq!(
+            offset_opt,
+            Some(offset_2),
+            "expected committed offset for analytics on orders partition 0 to be offset_2 after restart"
+        );
+
+        let offset_opt = broker.get_committed_offset(&group, &payments_topic, partition_id).expect("failed to get committed offset for fraud-detector on payments partition 0 after restart");
+        assert_eq!(
+            offset_opt,
+            Some(offset_3),
+            "expected committed offset for fraud-detector on payments partition 0 to be offset_3 after restart"
+        );
+
+        let offset_opt = broker.get_committed_offset(&analytics_group, &payments_topic, partition_id).expect("failed to get committed offset for analytics on payments partition 0 after restart");
+        assert_eq!(
+            offset_opt,
+            Some(offset_4),
+            "expected committed offset for analytics on payments partition 0 to be offset_4 after restart"
+        );
     }
 }
