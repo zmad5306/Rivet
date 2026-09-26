@@ -1606,9 +1606,9 @@ mod tests {
             .create_topic(topic.clone(), 1)
             .expect("failed to create topic 'orders'");
 
-        let fraud_offset_opt = broker
-            .get_committed_offset(&"fraud-detector".to_string(), &"orders".to_string(), 0)
-            .expect("failed to get committed offset for fraud-detector on orders partition 0");
+        let fraud_offset_opt = broker.get_committed_offset(&group, &topic, 0).expect(
+            "failed to get committed offset for fraud-detector on topic 'orders' partition 0",
+        );
 
         assert!(
             fraud_offset_opt.is_none(),

@@ -18,7 +18,7 @@ pub(crate) struct OffsetStore {
 }
 
 fn publish(temp_path: &Path, path: &Path) -> std::io::Result<()> {
-    std::fs::rename(&temp_path, &path)
+    std::fs::rename(temp_path, path)
 }
 
 #[cfg(test)]
@@ -40,7 +40,7 @@ impl OffsetStore {
         let root = data_root.join(OFFSET_STORE_DIR);
         Self {
             root,
-            publish_operation: publish_operation,
+            publish_operation,
         }
     }
 
@@ -123,12 +123,10 @@ impl OffsetStore {
                             }
                             Ok(())
                         }
-                        Err(source) => {
-                            return Err(OffsetStoreError::Io {
-                                source,
-                                path: path.to_path_buf(),
-                            });
-                        }
+                        Err(source) => Err(OffsetStoreError::Io {
+                            source,
+                            path: path.to_path_buf(),
+                        }),
                     }
                 } else {
                     Err(OffsetStoreError::Io {
@@ -683,7 +681,7 @@ mod tests {
 
         let mut asserted = false;
         for entry in std::fs::read_dir(
-            &final_offset_path
+            final_offset_path
                 .parent()
                 .expect("failed to get parent directory"),
         )
