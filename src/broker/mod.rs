@@ -158,6 +158,18 @@ impl Broker {
         }
     }
 
+    /// Persists a consumer group's caller-provided next offset for an existing topic.
+    ///
+    /// Group, topic, and partition validation happens before offset-store mutation. Commits are
+    /// monotonic: repeating the current value succeeds, advancing succeeds, and rewinding fails
+    /// without changing the committed value. Only partition 0 is supported in the current
+    /// single-partition architecture.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConsumerError`] when the group or topic name is invalid, the topic is missing,
+    /// the partition is unsupported, the commit would rewind, the stored value is malformed, an
+    /// offset path is unsafe, or an underlying filesystem operation fails.
     pub fn commit_offset(
         &self,
         group: &str,
@@ -183,6 +195,17 @@ impl Broker {
         Ok(())
     }
 
+    /// Returns a consumer group's committed next offset for an existing topic.
+    ///
+    /// `Ok(None)` means no final committed offset exists and is distinct from `Ok(Some(0))`.
+    /// Lookup is read-only and ignores unpublished sibling temporary files. Only partition 0 is
+    /// supported in the current single-partition architecture.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConsumerError`] when the group or topic name is invalid, the topic is missing,
+    /// the partition is unsupported, the final offset is malformed, an offset path is unsafe, or
+    /// an underlying filesystem operation fails.
     pub fn get_committed_offset(
         &self,
         group: &str,

@@ -257,6 +257,8 @@ rivet consume orders --group fraud-detector
 
 Consumer groups provide durable and independent reader positions. Persist the **next offset to read**, not the last processed offset. If a consumer handles offset `42`, a successful commit stores `43`.
 
+Consumer-group names are case-preserving strings from 1 through 128 bytes. Every character must be an ASCII letter, ASCII digit, hyphen (`-`), or underscore (`_`). Empty names, separators, dot components, traversal syntax, whitespace, NUL, Unicode, and other punctuation are rejected before offset-store filesystem access. Topic names continue to use the same existing topic-name domain validation. Milestone 10 supports partition `0` only.
+
 Committed offsets are unsigned decimal `u64` values. A missing commit returns `None` through the logical API and is distinct from a committed offset of `0`.
 
 Offset commits are monotonic. A commit greater than the currently stored value advances the consumer position, an equal commit succeeds as an idempotent no-op, and a lower commit is rejected with a typed rewind error without changing the stored value.
@@ -273,7 +275,15 @@ data/
         0.offset
 ```
 
-The file contains the next offset in canonical unsigned decimal form, such as `43`: ASCII digits only, no sign, whitespace, newline, or leading zeroes, except that zero is represented as `0`. Updates are atomic: write a temporary file, sync it, and atomically rename it. The implementation must also consider the durability of the containing directory entry.
+`__consumer_offsets` is reserved metadata, not a topic. Broker startup ignores that one direct child while retaining the normal fail-fast catalog policy for every other malformed child.
+
+The final file contains the next offset in canonical unsigned decimal form, such as `43`: ASCII digits only, no sign, whitespace, newline, or leading zeroes, except that zero is represented as `0`. Missing final files return `None`. Empty, non-UTF-8, non-decimal, overflowing, or noncanonical final contents return a typed malformed-offset error; they are never silently repaired.
+
+Lookup reads only the final `<partition>.offset` file. Sibling `.tmp` files are unpublished state and are ignored even when they contain a valid-looking offset. Lookup is read-only: it does not create directories, remove temporary files, promote a temporary value, or replace malformed committed state.
+
+Commits create and validate the reserved root, group directory, and topic directory without following filesystem aliases. A commit writes the complete canonical value to a uniquely owned sibling file named `0.offset.<process-id>.<counter>.tmp`, flushes the userspace buffer, calls `sync_data()`, closes the file, and publishes it with `std::fs::rename`. A write or publication failure removes only that operation's temporary file, preserves the prior final value, leaves unrelated temporary artifacts untouched, and returns a typed error retaining path and I/O-source context.
+
+On Unix, renaming the sibling file publishes or replaces the final path atomically, after which Rivet opens the containing topic directory and calls `sync_all()` to request durability for the renamed directory entry. On Windows, the temporary file contents are still flushed and synced before publication, but stable Rust does not provide the directory-handle behavior used here to sync the renamed directory entry. The current `std::fs::rename` strategy also inherits Windows destination-replacement limitations, so a forward commit over an existing final file may fail rather than replace it. Windows junction/alias rejection and repeated replacement require Windows-specific verification and remain explicit platform limitations; they must not be described as crash-durable guarantees.
 
 Updating one consumer group must never affect another.
 
@@ -289,6 +299,8 @@ read(topic, partition, offset) -> Option<Record>
 commit_offset(group, topic, partition, next_offset)
 get_committed_offset(group, topic, partition) -> Option<u64>
 ```
+
+Both consumer-offset operations validate the group, topic, and partition before accessing the offset store, and both require the referenced topic to exist in the Broker catalog. `commit_offset` stores the caller-provided next offset; it never derives that value from a record offset. `get_committed_offset` returns `None` only when the final committed file is absent. Validation failures, missing topics, rewind attempts, malformed files, unsafe paths, and I/O failures remain distinct typed causes under `ConsumerError`.
 
 Use meaningful typed errors that retain their causes. Expected categories include:
 
