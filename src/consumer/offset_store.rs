@@ -473,6 +473,55 @@ mod tests {
     }
 
     #[test]
+    fn committed_offset_lookup_rejects_malformed_final_file_even_with_valid_temporary_file() {
+        let root = tempfile::tempdir().expect("failed to create temporary root");
+        let offset_store = OffsetStore::new(root.path());
+        let fraud_detector_group_name = ConsumerGroupName::new("fraud-detector".to_string())
+            .expect("should succeed for valid group name");
+        let orders_topic_name =
+            TopicName::new("orders".to_string()).expect("should succeed for valid topic name");
+        let final_offset_path = offset_store
+            .offset_path(&fraud_detector_group_name, &orders_topic_name, 0)
+            .expect("should succeed for valid partition id 0");
+        let temp_offset_path = final_offset_path.with_extension("tmp");
+
+        std::fs::create_dir_all(
+            final_offset_path
+                .parent()
+                .expect("failed to get parent directory for final offset file"),
+        )
+        .expect("failed to create parent directories for final offset file");
+        std::fs::write(&final_offset_path, b"not-a-number")
+            .expect("failed to write malformed final offset file");
+        std::fs::write(&temp_offset_path, b"43").expect("failed to write temporary offset file");
+
+        let error = offset_store
+            .get_committed_offset(&fraud_detector_group_name, &orders_topic_name, 0)
+            .expect_err("expected malformed offset error");
+
+        assert!(
+            matches!(error, OffsetStoreError::MalformedOffset { path } if path == final_offset_path),
+            "expected malformed offset error for the final offset file"
+        );
+
+        let final_contents =
+            std::fs::read(&final_offset_path).expect("failed to read final offset file");
+
+        assert_eq!(
+            final_contents, b"not-a-number",
+            "final offset file should contain the malformed offset"
+        );
+
+        let temp_contents =
+            std::fs::read(&temp_offset_path).expect("failed to read temporary offset file");
+
+        assert_eq!(
+            temp_contents, b"43",
+            "temporary offset file should contain the valid offset"
+        );
+    }
+
+    #[test]
     fn commit_offset_persists_first_forward_and_idempotent_values() {
         let root = tempfile::tempdir().expect("failed to create temporary root");
         let offset_store = OffsetStore::new(root.path());
